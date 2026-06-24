@@ -1,3 +1,5 @@
+import { MachineConfig, StateMachineDefinition } from 'xstate';
+
 const authMachineDefinition = {
   types: {
     events: {} as
@@ -8,4 +10,5 @@ const authMachineDefinition = {
       | { type: 'otp_sms_validated' }
       | { type: 'otp_sms_validation_error' },
   },
+  actors: {},
 };
