@@ -28,6 +28,10 @@ export class AuthService {
     @Inject(STYTCH_CLIENT) private readonly stytch: stytch.Client,
   ) {}
 
+  async onModuleInit() {
+    await this.restoreSessions();
+  }
+
   private readonly sessions = new Map<string, Actor<AuthActor>>();
 
   @Cron(CronExpression.EVERY_5_SECONDS)
@@ -130,14 +134,13 @@ export class AuthService {
   public async restoreSessions(): Promise<void> {
     const repo = this.datasource.getRepository(FSM);
 
-    const records = await repo.find({
-      where: {
-        lastTransition: {
-          current: Not(In(['authenticated', 'idle'])),
-        },
-      },
-      order: { createdAt: 'DESC' },
-    });
+    const records = await repo
+      .createQueryBuilder('fsm')
+      .where(`fsm.last_transition->>'current' NOT IN (:...states)`, {
+        states: ['authenticated', 'idle'],
+      })
+      .orderBy('fsm.created_at', 'DESC')
+      .getMany();
 
     for (const record of records) {
       const snapshot = record.snapshot as Snapshot<unknown>;
