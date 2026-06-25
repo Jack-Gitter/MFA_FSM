@@ -11,6 +11,7 @@ import {
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
+import { FSM, FSM } from './db/entities/fsm.entity';
 
 type AuthActor = ReturnType<typeof createAuthMachine>;
 
@@ -39,6 +40,22 @@ export class AuthService {
       login_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
       signup_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
     });
+
+    const parent = this.sessions.get(email);
+    parent?.getPersistedSnapshot();
+
+    const repo = this.datasource.getRepository(FSM);
+
+    const machine = new FSM();
+
+    machine.lastTransition = {
+      prev: 'sending_magic_link',
+      current: 'awaiting_magic_link',
+    };
+
+    machine.snapshot = parent?.getPersistedSnapshot() as object;
+
+    repo.save(machine);
   };
 
   public validateMagicLinkActor = async (_input: ValidateMagicLinkInput) => {
