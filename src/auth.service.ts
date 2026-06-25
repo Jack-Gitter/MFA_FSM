@@ -53,6 +53,7 @@ export class AuthService {
         const entry = pending[i];
         if (result.status === 'fulfilled') {
           entry.status = OutboxStatus.SENT;
+          console.log('sent outbox message!');
         } else {
           console.error(
             `Failed to send magic link to ${entry.email}:`,
