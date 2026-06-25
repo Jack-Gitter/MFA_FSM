@@ -2,6 +2,7 @@ import { AnyActorRef, fromPromise, setup } from 'xstate';
 
 export type AuthMachineContext = {
   email: string;
+  sessionId: string;
 };
 
 export type AuthMachineEvents =
@@ -12,7 +13,7 @@ export type AuthMachineEvents =
   | { type: 'otp_sms_validated' }
   | { type: 'otp_sms_validation_error' };
 
-export type SendMagicLinkInput = { email: string };
+export type SendMagicLinkInput = { sessionId: string; email: string };
 export type ValidateMagicLinkInput = { token: string };
 export type SendOTPSMSInput = { phoneNumber: string };
 export type ValidateOTPSMSInput = { code: string; phoneNumber: string };
@@ -34,7 +35,7 @@ export const createAuthMachine = (actors: {
     types: {
       context: {} as AuthMachineContext,
       events: {} as AuthMachineEvents,
-      input: {} as { email: string },
+      input: {} as { sessionId: string; email: string },
     },
     actors: {
       sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input, self }) =>
@@ -58,13 +59,17 @@ export const createAuthMachine = (actors: {
     id: 'auth',
     initial: 'sending_magic_link',
     context: ({ input }) => ({
+      sessionId: input.sessionId,
       email: input.email,
     }),
     states: {
       sending_magic_link: {
         invoke: {
           src: 'sendMagicLink',
-          input: ({ context }) => ({ email: context.email }),
+          input: ({ context }) => ({
+            sessionId: context.sessionId,
+            email: context.email,
+          }),
           onDone: 'awaiting_magic_link',
           onError: 'idle',
         },

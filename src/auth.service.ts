@@ -1,7 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import { Actor, AnyActorRef, createActor } from 'xstate';
+import { DataSource, In, Not } from 'typeorm';
+import { Actor, AnyActorRef, createActor, Snapshot } from 'xstate';
 import {
+  AuthMachineContext,
   createAuthMachine,
   MintSessionInput,
   SendMagicLinkInput,
@@ -68,7 +69,7 @@ export class AuthService {
 
   public sendMagicLink = async (email: string) => {
     const sessionId = crypto.randomUUID();
-    const actor = this.createStateMachine(email);
+    const actor = this.createStateMachine(sessionId, email);
 
     actor.start();
     this.sessions.set(sessionId, actor);
@@ -77,7 +78,7 @@ export class AuthService {
   };
 
   public sendMagicLinkActor = async (
-    { email }: SendMagicLinkInput,
+    { sessionId, email }: SendMagicLinkInput,
     parent?: AnyActorRef,
   ) => {
     await this.datasource.transaction(async (manager) => {
@@ -86,6 +87,7 @@ export class AuthService {
       await manager.save(outbox);
 
       const machine = new FSM();
+      machine.sessionId = sessionId;
       machine.lastTransition = {
         prev: 'sending_magic_link',
         current: 'awaiting_magic_link',
@@ -111,7 +113,7 @@ export class AuthService {
     throw new Error('not implemented');
   };
 
-  public createStateMachine(email: string) {
+  public createStateMachine(sessionId: string, email: string) {
     const machine = createAuthMachine({
       sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
       validateMagicLink: (input) => this.validateMagicLinkActor(input),
@@ -121,7 +123,44 @@ export class AuthService {
     });
 
     return createActor(machine, {
-      input: { email },
+      input: { sessionId, email },
     });
+  }
+
+  public async restoreSessions(): Promise<void> {
+    const repo = this.datasource.getRepository(FSM);
+
+    const records = await repo.find({
+      where: {
+        lastTransition: {
+          current: Not(In(['authenticated', 'idle'])),
+        },
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    for (const record of records) {
+      const snapshot = record.snapshot as Snapshot<unknown>;
+      const context = (snapshot as any).context as AuthMachineContext;
+
+      const machine = createAuthMachine({
+        sendMagicLink: (input, parent) =>
+          this.sendMagicLinkActor(input, parent),
+        validateMagicLink: (input) => this.validateMagicLinkActor(input),
+        sendOTPSMS: (input) => this.sendOTPSMSActor(input),
+        validateOTPSMS: (input) => this.validateOTPSMSActor(input),
+        mintSession: (input) => this.mintSessionActor(input),
+      });
+
+      const actor = createActor(machine, {
+        input: { sessionId: context.sessionId, email: context.email },
+        snapshot,
+      });
+
+      actor.start();
+      this.sessions.set(record.sessionId, actor);
+    }
+
+    console.log(`Restored ${records.length} sessions from database`);
   }
 }

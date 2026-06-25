@@ -11,6 +11,9 @@ export class FSM {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ name: 'session_id' })
+  sessionId: string;
+
   @Column({ type: 'jsonb' })
   snapshot: object;
 
