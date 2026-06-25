@@ -1,7 +1,15 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { createMachine } from 'xstate';
-import { authMachineDefinition } from './auth.machine';
+import { createActor, createMachine } from 'xstate';
+import {
+  authMachineDefinition,
+  createAuthMachine,
+  MintSessionInput,
+  SendMagicLinkInput,
+  SendOTPSMSInput,
+  ValidateMagicLinkInput,
+  ValidateOTPSMSInput,
+} from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
 
@@ -12,7 +20,7 @@ export class AuthService {
     @Inject(STYTCH_CLIENT) private readonly stytch: stytch.Client,
   ) {}
 
-  public sendMagicLinkActor = async (email: string) => {
+  public sendMagicLinkActor = async ({ email }: SendMagicLinkInput) => {
     await this.stytch.magicLinks.email.loginOrCreate({
       email,
       login_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
@@ -20,22 +28,31 @@ export class AuthService {
     });
   };
 
-  public validateMagicLinkActor = async () => {};
+  public validateMagicLinkActor = async (_input: ValidateMagicLinkInput) => {
+    throw new Error('not implemented');
+  };
 
-  public sendOTPSMSActor = async () => {};
+  public sendOTPSMSActor = async (_input: SendOTPSMSInput) => {
+    throw new Error('not implemented');
+  };
 
-  public validateOTPSMSActor = async () => {};
+  public validateOTPSMSActor = async (_input: ValidateOTPSMSInput) => {
+    throw new Error('not implemented');
+  };
 
-  public mintSessionActor = async () => {};
+  public mintSessionActor = async (_input: MintSessionInput) => {
+    throw new Error('not implemented');
+  };
 
   public createStateMachine() {
-    const definition = authMachineDefinition;
-    definition.actors.sendMagicLink = this.sendMagicLinkActor;
-    definition.actors.validateMagicLink = this.validateMagicLinkActor;
-    definition.actors.sendOTPSMS = this.sendOTPSMSActor;
-    definition.actors.validateOTPSMS = this.validateOTPSMSActor;
-    definition.actors.mintSession = this.mintSessionActor;
+    const machine = createAuthMachine({
+      sendMagicLink: (input) => this.sendMagicLinkActor(input),
+      validateMagicLink: (input) => this.validateMagicLinkActor(input),
+      sendOTPSMS: (input) => this.sendOTPSMSActor(input),
+      validateOTPSMS: (input) => this.validateOTPSMSActor(input),
+      mintSession: (input) => this.mintSessionActor(input),
+    });
 
-    const actor = createMachine(authMachineDefinition);
+    return createActor(machine);
   }
 }
