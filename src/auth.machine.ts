@@ -2,8 +2,6 @@ import { fromPromise, setup } from 'xstate';
 
 export type AuthMachineContext = {
   email: string;
-  magicLinkToken: string | null;
-  phoneNumber: string | null;
 };
 
 export type AuthMachineEvents =
@@ -33,6 +31,7 @@ export const createAuthMachine = (actors: {
     types: {
       context: {} as AuthMachineContext,
       events: {} as AuthMachineEvents,
+      input: {} as { email: string },
     },
     actors: {
       sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input }) =>
@@ -54,9 +53,22 @@ export const createAuthMachine = (actors: {
     },
   }).createMachine({
     id: 'auth',
-    initial: 'idle',
-    context: { email: '', magicLinkToken: null, phoneNumber: null },
+    initial: 'sending_magic_link',
+    context: ({ input }: { input: { email: string } }) => ({
+      email: input.email,
+      magicLinkToken: null,
+      phoneNumber: null,
+    }),
     states: {
+      sending_magic_link: {
+        invoke: {
+          src: 'sendMagicLink',
+          input: ({ context }) => ({ email: context.email }),
+          onDone: 'awaiting_magic_link',
+          onError: 'idle',
+        },
+      },
+      awaiting_magic_link: {},
       idle: {},
     },
   });

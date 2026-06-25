@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { Actor, createActor, createMachine } from 'xstate';
+import { Actor, createActor } from 'xstate';
 import {
   createAuthMachine,
   MintSessionInput,
@@ -11,7 +11,6 @@ import {
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
-import { FSM } from './db/entities/fsm.entity';
 
 type AuthActor = ReturnType<typeof createAuthMachine>;
 
@@ -30,7 +29,6 @@ export class AuthService {
 
     actor.start();
     this.sessions.set(sessionId, actor);
-    actor.send({ type: 'received_magic_link_submission', email });
 
     return { sessionId };
   };
