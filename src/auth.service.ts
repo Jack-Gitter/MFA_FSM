@@ -79,24 +79,19 @@ export class AuthService {
     { email }: SendMagicLinkInput,
     parent?: AnyActorRef,
   ) => {
-    await this.stytch.magicLinks.email.loginOrCreate({
-      email,
-      login_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
-      signup_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
+    await this.datasource.transaction(async (manager) => {
+      const outbox = new MagicLinkOutbox();
+      outbox.email = email;
+      await manager.save(outbox);
+
+      const machine = new FSM();
+      machine.lastTransition = {
+        prev: 'sending_magic_link',
+        current: 'awaiting_magic_link',
+      };
+      machine.snapshot = parent?.getPersistedSnapshot() as object;
+      await manager.save(machine);
     });
-
-    const repo = this.datasource.getRepository(FSM);
-
-    const machine = new FSM();
-
-    machine.lastTransition = {
-      prev: 'sending_magic_link',
-      current: 'awaiting_magic_link',
-    };
-
-    machine.snapshot = parent?.getPersistedSnapshot() as object;
-
-    repo.save(machine);
   };
 
   public validateMagicLinkActor = async (_input: ValidateMagicLinkInput) => {
