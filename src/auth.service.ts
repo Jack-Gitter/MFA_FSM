@@ -44,8 +44,6 @@ export class AuthService {
       signup_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
     });
 
-    parent?.getPersistedSnapshot();
-
     const repo = this.datasource.getRepository(FSM);
 
     const machine = new FSM();

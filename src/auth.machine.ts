@@ -57,10 +57,8 @@ export const createAuthMachine = (actors: {
   }).createMachine({
     id: 'auth',
     initial: 'sending_magic_link',
-    context: ({ input }: { input: { email: string } }) => ({
+    context: ({ input }) => ({
       email: input.email,
-      magicLinkToken: null,
-      phoneNumber: null,
     }),
     states: {
       sending_magic_link: {
