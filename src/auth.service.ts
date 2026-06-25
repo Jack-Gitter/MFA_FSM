@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { authMachineDefinition } from './machine/definition';
 import { createMachine } from 'xstate';
+import { authMachineDefinition } from './auth.machine';
 
 @Injectable()
 export class AuthService {
