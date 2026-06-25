@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { Actor, createActor } from 'xstate';
+import { Actor, AnyActorRef, createActor } from 'xstate';
 import {
   createAuthMachine,
   MintSessionInput,
@@ -11,7 +11,7 @@ import {
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
-import { FSM, FSM } from './db/entities/fsm.entity';
+import { FSM } from './db/entities/fsm.entity';
 
 type AuthActor = ReturnType<typeof createAuthMachine>;
 
@@ -34,14 +34,16 @@ export class AuthService {
     return { sessionId };
   };
 
-  public sendMagicLinkActor = async ({ email }: SendMagicLinkInput) => {
+  public sendMagicLinkActor = async (
+    { email }: SendMagicLinkInput,
+    parent?: AnyActorRef,
+  ) => {
     await this.stytch.magicLinks.email.loginOrCreate({
       email,
       login_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
       signup_magic_link_url: process.env.STYTCH_MAGIC_LINK_URL!,
     });
 
-    const parent = this.sessions.get(email);
     parent?.getPersistedSnapshot();
 
     const repo = this.datasource.getRepository(FSM);
@@ -76,7 +78,7 @@ export class AuthService {
 
   public createStateMachine(email: string) {
     const machine = createAuthMachine({
-      sendMagicLink: (input) => this.sendMagicLinkActor(input),
+      sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
       validateMagicLink: (input) => this.validateMagicLinkActor(input),
       sendOTPSMS: (input) => this.sendOTPSMSActor(input),
       validateOTPSMS: (input) => this.validateOTPSMSActor(input),

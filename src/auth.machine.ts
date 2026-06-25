@@ -1,4 +1,4 @@
-import { fromPromise, setup } from 'xstate';
+import { AnyActorRef, fromPromise, setup } from 'xstate';
 
 export type AuthMachineContext = {
   email: string;
@@ -19,7 +19,10 @@ export type ValidateOTPSMSInput = { code: string; phoneNumber: string };
 export type MintSessionInput = { magicLinkToken: string };
 
 export const createAuthMachine = (actors: {
-  sendMagicLink: (input: SendMagicLinkInput) => Promise<void>;
+  sendMagicLink: (
+    input: SendMagicLinkInput,
+    parent?: AnyActorRef,
+  ) => Promise<void>;
   validateMagicLink: (
     input: ValidateMagicLinkInput,
   ) => Promise<{ phoneNumber: string }>;
@@ -34,8 +37,8 @@ export const createAuthMachine = (actors: {
       input: {} as { email: string },
     },
     actors: {
-      sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input }) =>
-        actors.sendMagicLink(input),
+      sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input, self }) =>
+        actors.sendMagicLink(input, self._parent),
       ),
       validateMagicLink: fromPromise<
         { phoneNumber: string },
