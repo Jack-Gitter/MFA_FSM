@@ -1,8 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { createActor, createMachine } from 'xstate';
+import { Actor, createActor, createMachine } from 'xstate';
 import {
-  authMachineDefinition,
   createAuthMachine,
   MintSessionInput,
   SendMagicLinkInput,
@@ -12,6 +11,9 @@ import {
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
+import { FSM } from './db/entities/fsm.entity';
+
+type AuthActor = ReturnType<typeof createAuthMachine>;
 
 @Injectable()
 export class AuthService {
@@ -19,6 +21,19 @@ export class AuthService {
     private readonly datasource: DataSource,
     @Inject(STYTCH_CLIENT) private readonly stytch: stytch.Client,
   ) {}
+
+  private readonly sessions = new Map<string, Actor<AuthActor>>();
+
+  public sendMagicLink = async (email: string) => {
+    const sessionId = crypto.randomUUID();
+    const actor = this.createStateMachine(email);
+
+    actor.start();
+    this.sessions.set(sessionId, actor);
+    actor.send({ type: 'received_magic_link_submission', email });
+
+    return { sessionId };
+  };
 
   public sendMagicLinkActor = async ({ email }: SendMagicLinkInput) => {
     await this.stytch.magicLinks.email.loginOrCreate({
@@ -44,7 +59,7 @@ export class AuthService {
     throw new Error('not implemented');
   };
 
-  public createStateMachine() {
+  public createStateMachine(email: string) {
     const machine = createAuthMachine({
       sendMagicLink: (input) => this.sendMagicLinkActor(input),
       validateMagicLink: (input) => this.validateMagicLinkActor(input),
@@ -53,6 +68,8 @@ export class AuthService {
       mintSession: (input) => this.mintSessionActor(input),
     });
 
-    return createActor(machine);
+    return createActor(machine, {
+      input: { email },
+    });
   }
 }

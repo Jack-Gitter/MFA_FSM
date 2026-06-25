@@ -8,7 +8,7 @@ export class AuthController {
 
   @Post('magic-link')
   async sendMagicLink(@Body() dto: SendMagicLinkDto) {
-    await this.authService.sendMagicLinkActor(dto.email);
-    return { sent: true };
+    const { sessionId } = await this.authService.sendMagicLink(dto.email);
+    return { sessionId };
   }
 }
