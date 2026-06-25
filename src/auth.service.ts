@@ -7,7 +7,7 @@ import { authMachineDefinition } from './auth.machine';
 export class AuthService {
   constructor(datasource: DataSource) {}
 
-  public sendMagicLinkActor = async () => {};
+  public sendMagicLinkActor = async (email: string) => {};
 
   public validateMagicLinkActor = async () => {};
 

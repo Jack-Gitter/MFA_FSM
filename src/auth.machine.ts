@@ -9,7 +9,7 @@ export const authMachineDefinition = {
       | { type: 'otp_sms_validation_error' },
   },
   actors: {
-    sendMagicLink: () => {},
+    sendMagicLink: (email: string) => {},
     validateMagicLink: () => {},
     sendOTPSMS: () => {},
     validateOTPSMS: () => {},
