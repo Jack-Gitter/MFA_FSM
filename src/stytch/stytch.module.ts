@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import * as stytch from 'stytch';
-import { STYTCH_CLIENT } from './stytch.constants';
+import { STYTCH_CLIENT } from './types/constants';
 
 @Module({
   providers: [

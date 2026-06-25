@@ -3,6 +3,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { FSM } from './db/entities/fsm.entity';
+import { StytchModule } from './stytch.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { FSM } from './db/entities/fsm.entity';
       entities: [FSM],
       synchronize: true,
     }),
+    StytchModule,
   ],
   controllers: [AuthController],
   providers: [AuthService],
