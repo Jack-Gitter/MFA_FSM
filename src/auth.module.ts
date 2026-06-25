@@ -5,9 +5,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { FSM } from './db/entities/fsm.entity';
 import { ConfigModule } from '@nestjs/config';
 import { StytchModule } from './stytch/stytch.module';
+import { MagicLinkOutbox } from './db/entities/email-outbox.entity';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
     }),
@@ -18,7 +21,7 @@ import { StytchModule } from './stytch/stytch.module';
       username: 'postgres',
       password: 'postgres',
       database: 'mfa_fsm',
-      entities: [FSM],
+      entities: [FSM, MagicLinkOutbox],
       synchronize: true,
     }),
     StytchModule,
