@@ -1,7 +1,8 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, Res } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { SendMagicLinkDto, SendMagicLinkResponse } from './dto/dto';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Response } from 'express';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -13,7 +14,16 @@ export class AuthController {
   @ApiResponse({ status: 201, type: SendMagicLinkResponse })
   async sendMagicLink(
     @Body() dto: SendMagicLinkDto,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<SendMagicLinkResponse> {
-    return await this.authService.sendMagicLink(dto.email);
+    const result = await this.authService.sendMagicLink(dto.email);
+
+    res.cookie('sessionId', result.sessionId, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+    });
+
+    return result;
   }
 }
