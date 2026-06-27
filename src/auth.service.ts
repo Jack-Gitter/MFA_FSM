@@ -137,12 +137,13 @@ export class AuthService {
   ): Promise<void> => {
     await this.stytch.magicLinks.authenticate({ token });
 
-    await this.datasource
-      .getRepository(FSM)
-      .update(
-        { sessionId },
-        { snapshot: parent?.getPersistedSnapshot() as object },
-      );
+    await this.datasource.getRepository(FSM).update(
+      { sessionId },
+      {
+        snapshot: parent?.getPersistedSnapshot() as object,
+        processedMagicLink: true,
+      },
+    );
   };
 
   public sendOTPSMSActor = async (
