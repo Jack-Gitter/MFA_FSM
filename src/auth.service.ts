@@ -80,38 +80,6 @@ export class AuthService {
     return { sessionId };
   };
 
-  public async handleMagicLink({
-    sessionId,
-    token,
-  }: {
-    sessionId: string;
-    token: string;
-  }): Promise<{ hasPhone: boolean }> {
-    const actor = this.sessions.get(sessionId);
-
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
-
-    actor.send({ type: 'received_magic_link', token });
-
-    const snapshot = actor.getSnapshot();
-    const email = snapshot.context.email;
-
-    const searchResult = await this.stytch.users.search({
-      query: {
-        operator: 'AND',
-        operands: [{ filter_name: 'email_address', filter_value: [email] }],
-      },
-    });
-
-    const user = searchResult.results[0];
-
-    if (!user) throw new Error(`No Stytch user found for email: ${email}`);
-
-    return { hasPhone: user.phone_numbers.length > 0 };
-  }
-
   public sendMagicLinkActor = async (
     { sessionId, email }: SendMagicLinkInput,
     parent?: AnyActorRef,
@@ -146,6 +114,38 @@ export class AuthService {
       await manager.save(machine);
     });
   };
+
+  public async handleMagicLink({
+    sessionId,
+    token,
+  }: {
+    sessionId: string;
+    token: string;
+  }): Promise<{ hasPhone: boolean }> {
+    const actor = this.sessions.get(sessionId);
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    actor.send({ type: 'received_magic_link', token });
+
+    const snapshot = actor.getSnapshot();
+    const email = snapshot.context.email;
+
+    const searchResult = await this.stytch.users.search({
+      query: {
+        operator: 'AND',
+        operands: [{ filter_name: 'email_address', filter_value: [email] }],
+      },
+    });
+
+    const user = searchResult.results[0];
+
+    if (!user) throw new Error(`No Stytch user found for email: ${email}`);
+
+    return { hasPhone: user.phone_numbers.length > 0 };
+  }
 
   public processMagicLinkActor = async (
     { sessionId, token }: ProcessMagicLinkInput,

@@ -31,13 +31,20 @@ export class AuthController {
   @ApiOperation({ summary: 'Handle magic link callback' })
   async authenticate(
     @Query('token') token: string,
-    @Req() req: Request,
+    @Req() req: any,
     @Res() res: Response,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
-    await this.authService.handleMagicLink({ sessionId, token });
-    // need to redirect based on whether the user needs to register otp or not
-    res.redirect(`http://localhost:8080/otp`);
+    const { hasPhone } = await this.authService.handleMagicLink({
+      sessionId,
+      token,
+    });
+
+    if (hasPhone) {
+      res.redirect(`http://localhost:8080/otp`);
+    } else {
+      res.redirect(`http://localhost:8080/otp/register`);
+    }
   }
 
   @Post()
