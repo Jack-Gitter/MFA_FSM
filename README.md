@@ -10,4 +10,5 @@
     * don't go to stytch api in order to fetch the user, just use the session token to see if the user has a phone number or not
     * make sure that each step is idempotent 
     * make sure that if we fail at any point, the state machine can come back up and keep moving along and doesn't get stuck anywhere
+    * somehow return stytch session to FE clearner
 
