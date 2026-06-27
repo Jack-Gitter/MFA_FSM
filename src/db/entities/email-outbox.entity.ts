@@ -20,6 +20,9 @@ export class MagicLinkOutbox {
   @Column()
   email: string;
 
+  @Column({ name: 'session_id' })
+  sessionId: string;
+
   @Column({ type: 'enum', enum: OutboxStatus, default: OutboxStatus.PENDING })
   status: OutboxStatus;
 

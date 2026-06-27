@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { DataSource, In, Not } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { Actor, AnyActorRef, createActor, Snapshot } from 'xstate';
 import {
   AuthMachineContext,
@@ -7,6 +7,8 @@ import {
   MintSessionInput,
   SendMagicLinkInput,
   SendOTPSMSInput,
+  StoreMagicLinkTokenInput,
+  StoreOTPCodeInput,
   ValidateMagicLinkInput,
   ValidateOTPSMSInput,
 } from './auth.machine';
@@ -90,13 +92,14 @@ export class AuthService {
       const machineRepository = manager.getRepository(FSM);
 
       const row = await outboxRepository.findOne({
-        where: { email },
+        where: { email, sessionId },
         lock: { mode: 'pessimistic_write' },
       });
 
       if (!row) {
         const outboxMessage = outboxRepository.create({
-          email: email,
+          email,
+          sessionId,
           status: OutboxStatus.PENDING,
         });
 
@@ -112,27 +115,45 @@ export class AuthService {
     });
   };
 
-  public validateMagicLinkActor = async (_input: ValidateMagicLinkInput) => {
+  public storeMagicLinkTokenActor = async (
+    _input: StoreMagicLinkTokenInput,
+  ): Promise<void> => {
     throw new Error('not implemented');
   };
 
-  public sendOTPSMSActor = async (_input: SendOTPSMSInput) => {
+  public validateMagicLinkActor = async (
+    _input: ValidateMagicLinkInput,
+  ): Promise<void> => {
     throw new Error('not implemented');
   };
 
-  public validateOTPSMSActor = async (_input: ValidateOTPSMSInput) => {
+  public sendOTPSMSActor = async (_input: SendOTPSMSInput): Promise<void> => {
     throw new Error('not implemented');
   };
 
-  public mintSessionActor = async (_input: MintSessionInput) => {
+  public storeOTPCodeActor = async (
+    _input: StoreOTPCodeInput,
+  ): Promise<void> => {
+    throw new Error('not implemented');
+  };
+
+  public validateOTPSMSActor = async (
+    _input: ValidateOTPSMSInput,
+  ): Promise<void> => {
+    throw new Error('not implemented');
+  };
+
+  public mintSessionActor = async (_input: MintSessionInput): Promise<void> => {
     throw new Error('not implemented');
   };
 
   public createStateMachine(sessionId: string, email: string) {
     const machine = createAuthMachine({
       sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
+      storeMagicLinkToken: (input) => this.storeMagicLinkTokenActor(input),
       validateMagicLink: (input) => this.validateMagicLinkActor(input),
       sendOTPSMS: (input) => this.sendOTPSMSActor(input),
+      storeOTPCode: (input) => this.storeOTPCodeActor(input),
       validateOTPSMS: (input) => this.validateOTPSMSActor(input),
       mintSession: (input) => this.mintSessionActor(input),
     });
@@ -160,8 +181,10 @@ export class AuthService {
       const machine = createAuthMachine({
         sendMagicLink: (input, parent) =>
           this.sendMagicLinkActor(input, parent),
+        storeMagicLinkToken: (input) => this.storeMagicLinkTokenActor(input),
         validateMagicLink: (input) => this.validateMagicLinkActor(input),
         sendOTPSMS: (input) => this.sendOTPSMSActor(input),
+        storeOTPCode: (input) => this.storeOTPCodeActor(input),
         validateOTPSMS: (input) => this.validateOTPSMSActor(input),
         mintSession: (input) => this.mintSessionActor(input),
       });

@@ -6,30 +6,28 @@ export type AuthMachineContext = {
 };
 
 export type AuthMachineEvents =
-  | { type: 'received_magic_link_submission'; email: string }
-  | { type: 'magic_link_validated'; token: string }
-  | { type: 'magic_link_validation_error' }
-  | { type: 'received_otp_sms_submission'; code: string }
-  | { type: 'otp_sms_validated' }
-  | { type: 'otp_sms_validation_error' };
+  | { type: 'received_magic_link'; token: string }
+  | { type: 'received_otp'; code: string };
 
 export type SendMagicLinkInput = { sessionId: string; email: string };
-export type ValidateMagicLinkInput = { token: string };
-export type SendOTPSMSInput = { phoneNumber: string };
-export type ValidateOTPSMSInput = { code: string; phoneNumber: string };
-export type MintSessionInput = { magicLinkToken: string };
+export type StoreMagicLinkTokenInput = { sessionId: string; token: string };
+export type ValidateMagicLinkInput = { sessionId: string };
+export type SendOTPSMSInput = { sessionId: string };
+export type StoreOTPCodeInput = { sessionId: string; code: string };
+export type ValidateOTPSMSInput = { sessionId: string };
+export type MintSessionInput = { sessionId: string };
 
 export const createAuthMachine = (actors: {
   sendMagicLink: (
     input: SendMagicLinkInput,
     parent?: AnyActorRef,
   ) => Promise<void>;
-  validateMagicLink: (
-    input: ValidateMagicLinkInput,
-  ) => Promise<{ phoneNumber: string }>;
+  storeMagicLinkToken: (input: StoreMagicLinkTokenInput) => Promise<void>;
+  validateMagicLink: (input: ValidateMagicLinkInput) => Promise<void>;
   sendOTPSMS: (input: SendOTPSMSInput) => Promise<void>;
+  storeOTPCode: (input: StoreOTPCodeInput) => Promise<void>;
   validateOTPSMS: (input: ValidateOTPSMSInput) => Promise<void>;
-  mintSession: (input: MintSessionInput) => Promise<{ sessionToken: string }>;
+  mintSession: (input: MintSessionInput) => Promise<void>;
 }) =>
   setup({
     types: {
@@ -38,43 +36,143 @@ export const createAuthMachine = (actors: {
       input: {} as { sessionId: string; email: string },
     },
     actors: {
-      sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input, self }) =>
-        actors.sendMagicLink(input, self._parent),
+      sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input }) =>
+        actors.sendMagicLink(input),
       ),
-      validateMagicLink: fromPromise<
-        { phoneNumber: string },
-        ValidateMagicLinkInput
-      >(({ input }) => actors.validateMagicLink(input)),
+      storeMagicLinkToken: fromPromise<void, StoreMagicLinkTokenInput>(
+        ({ input }) => actors.storeMagicLinkToken(input),
+      ),
+      validateMagicLink: fromPromise<void, ValidateMagicLinkInput>(
+        ({ input }) => actors.validateMagicLink(input),
+      ),
       sendOTPSMS: fromPromise<void, SendOTPSMSInput>(({ input }) =>
         actors.sendOTPSMS(input),
+      ),
+      storeOTPCode: fromPromise<void, StoreOTPCodeInput>(({ input }) =>
+        actors.storeOTPCode(input),
       ),
       validateOTPSMS: fromPromise<void, ValidateOTPSMSInput>(({ input }) =>
         actors.validateOTPSMS(input),
       ),
-      mintSession: fromPromise<{ sessionToken: string }, MintSessionInput>(
-        ({ input }) => actors.mintSession(input),
+      mintSession: fromPromise<void, MintSessionInput>(({ input }) =>
+        actors.mintSession(input),
       ),
     },
   }).createMachine({
     id: 'auth',
-    initial: 'sending_magic_link',
+    initial: 'send_magic_link',
     context: ({ input }) => ({
       sessionId: input.sessionId,
       email: input.email,
     }),
     states: {
-      sending_magic_link: {
+      send_magic_link: {
         invoke: {
           src: 'sendMagicLink',
           input: ({ context }) => ({
             sessionId: context.sessionId,
             email: context.email,
           }),
-          onDone: 'awaiting_magic_link',
-          onError: 'idle',
+          onDone: 'waiting_for_magic_link_input',
+          onError: 'error',
         },
       },
-      awaiting_magic_link: {},
-      idle: {},
+
+      waiting_for_magic_link_input: {
+        initial: 'idle',
+        states: {
+          idle: {
+            on: {
+              received_magic_link: 'storing',
+            },
+          },
+          storing: {
+            invoke: {
+              src: 'storeMagicLinkToken',
+              input: ({ context, event }) => ({
+                sessionId: context.sessionId,
+                token: (event as { type: 'received_magic_link'; token: string })
+                  .token,
+              }),
+              onDone: '#auth.validate_magic_link',
+              onError: '#auth.error',
+            },
+          },
+        },
+      },
+
+      validate_magic_link: {
+        invoke: {
+          src: 'validateMagicLink',
+          input: ({ context }) => ({
+            sessionId: context.sessionId,
+          }),
+          onDone: 'send_sms_otp',
+          onError: 'error',
+        },
+      },
+
+      send_sms_otp: {
+        invoke: {
+          src: 'sendOTPSMS',
+          input: ({ context }) => ({
+            sessionId: context.sessionId,
+          }),
+          onDone: 'waiting_for_otp_input',
+          onError: 'error',
+        },
+      },
+
+      waiting_for_otp_input: {
+        initial: 'idle',
+        states: {
+          idle: {
+            on: {
+              received_otp: 'storing',
+            },
+          },
+          storing: {
+            invoke: {
+              src: 'storeOTPCode',
+              input: ({ context, event }) => ({
+                sessionId: context.sessionId,
+                code: (event as { type: 'received_otp'; code: string }).code,
+              }),
+              onDone: '#auth.validate_sms_otp',
+              onError: '#auth.error',
+            },
+          },
+        },
+      },
+
+      validate_sms_otp: {
+        invoke: {
+          src: 'validateOTPSMS',
+          input: ({ context }) => ({
+            sessionId: context.sessionId,
+          }),
+          onDone: 'mint_session',
+          onError: 'error',
+        },
+      },
+
+      mint_session: {
+        invoke: {
+          src: 'mintSession',
+          input: ({ context }) => ({
+            sessionId: context.sessionId,
+          }),
+          onDone: 'complete',
+          onError: 'error',
+        },
+      },
+
+      complete: {
+        type: 'final',
+      },
+
+      error: {
+        type: 'final',
+      },
     },
   });
