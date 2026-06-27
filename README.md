@@ -7,6 +7,7 @@
 * MINT_SESSION
 
 * next up
-    * make sure that depending on if the user has an phone set up, we redirect them to one otp page or another
-    * set up endpoint, service method, and actor for setting the sms device
-    * set up endpoint, service method, and actor for validating otp sms
+    * don't go to stytch api in order to fetch the user, just use the session token to see if the user has a phone number or not
+    * make sure that each step is idempotent 
+    * make sure that if we fail at any point, the state machine can come back up and keep moving along and doesn't get stuck anywhere
+
