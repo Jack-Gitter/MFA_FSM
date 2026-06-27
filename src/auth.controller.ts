@@ -47,8 +47,17 @@ export class AuthController {
     }
   }
 
-  @Post()
-  async registerOtpDevice() {}
+  @Post('enroll-phone')
+  async enrollPhone(
+    @Body() dto: { phoneNumber: string },
+    @Req() req: any,
+  ): Promise<void> {
+    const sessionId = req.cookies['sessionId'];
+    await this.authService.enrollPhone({
+      sessionId,
+      phoneNumber: dto.phoneNumber,
+    });
+  }
 
   @Post()
   async submitOtpSms() {}

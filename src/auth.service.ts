@@ -176,7 +176,7 @@ export class AuthService {
     { sessionId, email }: SendOTPSMSInput,
     parent?: AnyActorRef,
   ): Promise<void> => {
-    return await this.datasource.transaction(async (manager) => {
+    await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
 
       const machine = await machineRepository.findOne({
@@ -186,21 +186,23 @@ export class AuthService {
 
       if (!machine) throw new NotFoundException();
 
-      const searchResult = await this.stytch.users.search({
-        query: {
-          operator: 'AND',
-          operands: [{ filter_name: 'email_address', filter_value: [email] }],
-        },
-      });
+      let phoneNumber = machine.enrollPhoneNumber;
 
-      const user = searchResult.results[0];
+      if (!phoneNumber) {
+        const searchResult = await this.stytch.users.search({
+          query: {
+            operator: 'AND',
+            operands: [{ filter_name: 'email_address', filter_value: [email] }],
+          },
+        });
 
-      if (!user) throw new Error(`No Stytch user found for email: ${email}`);
+        const user = searchResult.results[0];
+        if (!user) throw new Error(`No Stytch user found for email: ${email}`);
 
-      const phoneNumber = user.phone_numbers?.[0]?.phone_number;
-
-      if (!phoneNumber)
-        throw new Error(`No phone number found for email: ${email}`);
+        phoneNumber = user.phone_numbers?.[0]?.phone_number;
+        if (!phoneNumber)
+          throw new Error(`No phone number found for email: ${email}`);
+      }
 
       await this.stytch.otps.sms.send({ phone_number: phoneNumber });
 
@@ -209,11 +211,40 @@ export class AuthService {
     });
   };
 
+  public async enrollPhone({
+    sessionId,
+    phoneNumber,
+  }: {
+    sessionId: string;
+    phoneNumber: string;
+  }): Promise<void> {
+    const actor = this.sessions.get(sessionId);
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    actor.send({ type: 'received_phone_number', phoneNumber });
+  }
+
   public enrollPhoneActor = async (
-    _input: EnrollPhoneInput,
-    _parent?: AnyActorRef,
+    { sessionId, phoneNumber }: EnrollPhoneInput,
+    parent?: AnyActorRef,
   ): Promise<void> => {
-    throw new Error('not implemented');
+    await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      machine.enrollPhoneNumber = phoneNumber;
+      machine.snapshot = parent?.getPersistedSnapshot() as object;
+      await machineRepository.save(machine);
+    });
   };
 
   public processSMSOtpActor = async (

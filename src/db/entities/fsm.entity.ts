@@ -22,4 +22,7 @@ export class FSM {
 
   @Column({ name: 'processed_magic_link', default: false })
   processedMagicLink: boolean;
+
+  @Column({ name: 'enroll_phone_number' })
+  enrollPhoneNumber: string;
 }
