@@ -2,16 +2,13 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  PrimaryGeneratedColumn,
+  PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
 
 @Entity('machines')
 export class FSM {
-  @PrimaryGeneratedColumn()
-  id: number;
-
-  @Column({ name: 'session_id' })
+  @PrimaryColumn({ name: 'session_id' })
   sessionId: string;
 
   @Column({ type: 'jsonb' })
