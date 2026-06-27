@@ -36,6 +36,13 @@ export class AuthController {
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
     await this.authService.handleMagicLink({ sessionId, token });
+    // need to redirect based on whether the user needs to register otp or not
     res.redirect(`http://localhost:8080/otp`);
   }
+
+  @Post()
+  async registerOtpDevice() {}
+
+  @Post()
+  async submitOtpSms() {}
 }
