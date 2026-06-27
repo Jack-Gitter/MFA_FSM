@@ -75,10 +75,7 @@ export class AuthService {
 
   public sendMagicLink = async (email: string) => {
     const sessionId = crypto.randomUUID();
-    const actor = this.createStateMachine(sessionId, email);
-
-    actor.start();
-    this.sessions.set(sessionId, actor);
+    await this.createStateMachine(sessionId, email);
 
     return { sessionId };
   };
@@ -222,7 +219,7 @@ export class AuthService {
     throw new Error('not implemented');
   };
 
-  public createStateMachine(sessionId: string, email: string) {
+  public async createStateMachine(sessionId: string, email: string) {
     const machine = createAuthMachine({
       sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
       processMagicLink: (input, parent) =>
@@ -233,9 +230,20 @@ export class AuthService {
       mintSession: (input, parent) => this.mintSessionActor(input, parent),
     });
 
-    return createActor(machine, {
+    const actor = createActor(machine, {
       input: { sessionId, email },
     });
+
+    actor.start();
+    this.sessions.set(sessionId, actor);
+
+    const fsmRepository = this.datasource.getRepository(FSM);
+    const fsm = fsmRepository.create({
+      sessionId,
+      snapshot: actor.getPersistedSnapshot(),
+    });
+
+    await fsmRepository.save(fsm);
   }
 
   public async restoreSessions(): Promise<void> {
