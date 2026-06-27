@@ -146,10 +146,45 @@ export class AuthService {
   };
 
   public sendOTPSMSActor = async (
-    _input: SendOTPSMSInput,
-    _parent?: AnyActorRef,
+    { sessionId, email }: SendOTPSMSInput,
+    parent?: AnyActorRef,
   ): Promise<SendOTPSMSOutput> => {
-    throw new Error('not implemented');
+    const searchResult = await this.stytch.users.search({
+      query: {
+        operator: 'AND',
+        operands: [{ filter_name: 'email_address', filter_value: [email] }],
+      },
+    });
+
+    const user = searchResult.results[0];
+
+    if (!user) {
+      throw new Error(`No Stytch user found for email: ${email}`);
+    }
+
+    const phoneNumber = user.phone_numbers?.[0]?.phone_number;
+
+    if (!phoneNumber) {
+      await this.datasource
+        .getRepository(FSM)
+        .update(
+          { sessionId },
+          { snapshot: parent?.getPersistedSnapshot() as object },
+        );
+
+      return { hasPhone: false };
+    }
+
+    await this.stytch.otps.sms.send({ phone_number: phoneNumber });
+
+    await this.datasource
+      .getRepository(FSM)
+      .update(
+        { sessionId },
+        { snapshot: parent?.getPersistedSnapshot() as object },
+      );
+
+    return { hasPhone: true };
   };
 
   public enrollPhoneActor = async (
