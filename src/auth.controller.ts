@@ -1,6 +1,10 @@
 import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { SendMagicLinkDto, SendMagicLinkResponse } from './dto/dto';
+import {
+  EnrollPhoneDto,
+  SendMagicLinkDto,
+  SendMagicLinkResponse,
+} from './dto/dto';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Response, Request } from 'express';
 
@@ -49,7 +53,7 @@ export class AuthController {
 
   @Post('enroll-phone')
   async enrollPhone(
-    @Body() dto: { phoneNumber: string },
+    @Body() dto: EnrollPhoneDto,
     @Req() req: any,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
