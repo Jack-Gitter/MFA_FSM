@@ -27,13 +27,15 @@ export class AuthController {
     return result;
   }
 
-  @Get('authenticate')
+  @Get()
   @ApiOperation({ summary: 'Handle magic link callback' })
   async authenticate(
     @Query('token') token: string,
     @Req() req: Request,
+    @Res() res: Response,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
     await this.authService.handleMagicLink({ sessionId, token });
+    res.redirect(`http://localhost:8080/otp`);
   }
 }
