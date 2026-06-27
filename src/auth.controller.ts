@@ -65,9 +65,22 @@ export class AuthController {
   }
 
   @Post('otp')
-  async submitOtp(@Body() dto: SubmitOtpDto, @Req() req: any): Promise<void> {
+  async submitOtp(
+    @Body() dto: SubmitOtpDto,
+    @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ sessionToken: string }> {
     const sessionId = req.cookies['sessionId'];
-    await this.authService.submitOtp({ sessionId, code: dto.code });
+    const { sessionToken } = await this.authService.submitOtp({
+      sessionId,
+      code: dto.code,
+    });
+    res.cookie('stytchSession', sessionToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+    });
+    return { sessionToken };
   }
 
   @Get('otp')

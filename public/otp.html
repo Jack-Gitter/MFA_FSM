@@ -21,7 +21,8 @@
           throw new Error('Failed to verify OTP');
         }
 
-        document.body.innerHTML = '<h1>Authenticated!</h1>';
+        const data = await res.json();
+        document.body.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
       } catch (err) {
         document.getElementById('error').textContent = err.message;
       }
