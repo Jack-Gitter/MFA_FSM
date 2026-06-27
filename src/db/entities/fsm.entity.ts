@@ -25,4 +25,11 @@ export class FSM {
 
   @Column({ name: 'enroll_phone_number', type: 'varchar', nullable: true })
   enrollPhoneNumber: string | null;
+  @Column({
+    name: 'session_token',
+    type: 'varchar',
+    nullable: true,
+    default: null,
+  })
+  sessionToken: string | null;
 }

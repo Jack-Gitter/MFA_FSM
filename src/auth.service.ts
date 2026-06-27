@@ -20,6 +20,7 @@ import {
   OutboxStatus,
 } from './db/entities/email-outbox.entity';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { SMSOTPOutbox } from './db/entities/sms-outbox.entity';
 
 type AuthActor = ReturnType<typeof createAuthMachine>;
 
@@ -64,6 +65,42 @@ export class AuthService {
         } else {
           console.error(
             `Failed to send magic link to ${entry.email}:`,
+            result.reason,
+          );
+          entry.status = OutboxStatus.FAILED;
+        }
+        return repo.save(entry);
+      }),
+    );
+  }
+
+  @Cron(CronExpression.EVERY_5_SECONDS)
+  public async pollSMSOTPOutbox(): Promise<void> {
+    const repo = this.datasource.getRepository(SMSOTPOutbox);
+
+    const pending = await repo.find({
+      where: { status: OutboxStatus.PENDING },
+      order: { createdAt: 'ASC' },
+    });
+
+    const results = await Promise.allSettled(
+      pending.map((entry) =>
+        this.stytch.otps.sms.send({
+          phone_number: entry.phoneNumber,
+          session_token: entry.sessionToken,
+        }),
+      ),
+    );
+
+    await Promise.all(
+      results.map((result, i) => {
+        const entry = pending[i];
+        if (result.status === 'fulfilled') {
+          entry.status = OutboxStatus.SENT;
+          console.log('sent sms otp!');
+        } else {
+          console.error(
+            `Failed to send OTP SMS to ${entry.phoneNumber}:`,
             result.reason,
           );
           entry.status = OutboxStatus.FAILED;
@@ -161,9 +198,14 @@ export class AuthService {
 
       if (!machine) throw new NotFoundException();
 
-      const result = await this.stytch.magicLinks.authenticate({ token });
+      const result = await this.stytch.magicLinks.authenticate({
+        token,
+        session_duration_minutes: 10,
+      });
+
       const hasPhone = result.user.phone_numbers.length > 0;
 
+      machine.sessionToken = result.session_token;
       machine.snapshot = parent?.getPersistedSnapshot() as object;
       machine.processedMagicLink = true;
       await machineRepository.save(machine);
@@ -178,6 +220,7 @@ export class AuthService {
   ): Promise<void> => {
     await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
+      const outboxRepository = manager.getRepository(SMSOTPOutbox);
 
       const machine = await machineRepository.findOne({
         where: { sessionId },
@@ -204,7 +247,21 @@ export class AuthService {
           throw new Error(`No phone number found for email: ${email}`);
       }
 
-      await this.stytch.otps.sms.send({ phone_number: phoneNumber });
+      const existing = await outboxRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!existing) {
+        const outboxMessage = outboxRepository.create({
+          phoneNumber,
+          sessionId,
+          sessionToken: machine.sessionToken!,
+          status: OutboxStatus.PENDING,
+        });
+
+        await outboxRepository.save(outboxMessage);
+      }
 
       machine.snapshot = parent?.getPersistedSnapshot() as object;
       await machineRepository.save(machine);

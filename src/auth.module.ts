@@ -7,6 +7,7 @@ import { ConfigModule } from '@nestjs/config';
 import { StytchModule } from './stytch/stytch.module';
 import { MagicLinkOutbox } from './db/entities/email-outbox.entity';
 import { ScheduleModule } from '@nestjs/schedule';
+import { SMSOTPOutbox } from './db/entities/sms-outbox.entity';
 
 @Module({
   imports: [
@@ -21,7 +22,7 @@ import { ScheduleModule } from '@nestjs/schedule';
       username: 'postgres',
       password: 'postgres',
       database: 'mfa_fsm',
-      entities: [FSM, MagicLinkOutbox],
+      entities: [FSM, MagicLinkOutbox, SMSOTPOutbox],
       synchronize: true,
     }),
     StytchModule,
