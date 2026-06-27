@@ -320,14 +320,28 @@ export class AuthService {
   }: {
     sessionId: string;
     code: string;
-  }): Promise<void> {
+  }): Promise<{ sessionToken: string }> {
     const actor = this.sessions.get(sessionId);
+    if (!actor) throw new Error(`No session found for sessionId: ${sessionId}`);
 
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
+    await new Promise<void>((resolve, reject) => {
+      const sub = actor.subscribe((snapshot) => {
+        if (snapshot.matches('complete')) {
+          sub.unsubscribe();
+          resolve();
+        } else if (snapshot.matches('error')) {
+          sub.unsubscribe();
+          reject(new Error('OTP validation failed'));
+        }
+      });
+      actor.send({ type: 'received_otp', code });
+    });
 
-    actor.send({ type: 'received_otp', code });
+    const machine = await this.datasource
+      .getRepository(FSM)
+      .findOne({ where: { sessionId } });
+
+    return { sessionToken: machine!.stytch_session! };
   }
 
   public processSMSOtpActor = async (
@@ -343,17 +357,17 @@ export class AuthService {
       });
 
       if (!machine) throw new NotFoundException();
-
       if (!machine.phoneId)
         throw new Error(`No phone_id found for sessionId: ${sessionId}`);
 
-      await this.stytch.otps.authenticate({
+      const result = await this.stytch.otps.authenticate({
         method_id: machine.phoneId,
         code,
         session_token: machine.sessionToken ?? undefined,
         session_duration_minutes: 60,
       });
 
+      machine.stytch_session = result.session_token;
       machine.snapshot = parent?.getPersistedSnapshot() as object;
       await machineRepository.save(machine);
     });

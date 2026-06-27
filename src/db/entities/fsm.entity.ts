@@ -36,4 +36,12 @@ export class FSM {
 
   @Column({ name: 'phone_id', type: 'varchar', nullable: true, default: null })
   phoneId: string | null;
+
+  @Column({
+    name: 'stytch_session',
+    type: 'varchar',
+    nullable: true,
+    default: null,
+  })
+  stytch_session: string | null;
 }
