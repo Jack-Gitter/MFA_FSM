@@ -152,19 +152,25 @@ export class AuthService {
       await this.stytch.magicLinks.authenticate({ token });
     }
 
-    await this.datasource.getRepository(FSM).update(
-      { sessionId },
-      {
-        snapshot: parent?.getPersistedSnapshot() as object,
-        processedMagicLink: true,
-      },
-    );
+    machine.snapshot = parent?.getPersistedSnapshot() as object;
+    machine.processedMagicLink = true;
+
+    await machineRepository.save(machine);
   };
 
   public sendOTPSMSActor = async (
     { sessionId, email }: SendOTPSMSInput,
     parent?: AnyActorRef,
   ): Promise<SendOTPSMSOutput> => {
+    const machineRepository = this.datasource.getRepository(FSM);
+
+    const machine = await machineRepository.findOne({
+      where: { sessionId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    if (!machine) throw new NotFoundException();
+
     const searchResult = await this.stytch.users.search({
       query: {
         operator: 'AND',
@@ -181,24 +187,16 @@ export class AuthService {
     const phoneNumber = user.phone_numbers?.[0]?.phone_number;
 
     if (!phoneNumber) {
-      await this.datasource
-        .getRepository(FSM)
-        .update(
-          { sessionId },
-          { snapshot: parent?.getPersistedSnapshot() as object },
-        );
+      machine.snapshot = parent?.getPersistedSnapshot() as object;
+      await machineRepository.save(machine);
 
       return { hasPhone: false };
     }
 
     await this.stytch.otps.sms.send({ phone_number: phoneNumber });
 
-    await this.datasource
-      .getRepository(FSM)
-      .update(
-        { sessionId },
-        { snapshot: parent?.getPersistedSnapshot() as object },
-      );
+    machine.snapshot = parent?.getPersistedSnapshot() as object;
+    await machineRepository.save(machine);
 
     return { hasPhone: true };
   };
