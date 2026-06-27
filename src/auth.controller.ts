@@ -4,6 +4,7 @@ import {
   EnrollPhoneDto,
   SendMagicLinkDto,
   SendMagicLinkResponse,
+  SubmitOtpDto,
 } from './dto/dto';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Response, Request } from 'express';
@@ -61,6 +62,12 @@ export class AuthController {
       sessionId,
       phoneNumber: dto.phoneNumber,
     });
+  }
+
+  @Post('otp')
+  async submitOtp(@Body() dto: SubmitOtpDto, @Req() req: any): Promise<void> {
+    const sessionId = req.cookies['sessionId'];
+    await this.authService.submitOtp({ sessionId, code: dto.code });
   }
 
   @Get('otp')

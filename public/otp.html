@@ -3,18 +3,28 @@
 <head><title>Enter OTP</title></head>
 <body>
   <h1>Enter your OTP code</h1>
-  <form>
-    <input type="text" id="code" placeholder="123456" maxlength="6" />
-    <button type="button" onclick="submit()">Submit</button>
-  </form>
+  <input type="text" id="code" placeholder="123456" maxlength="6" />
+  <button type="button" onclick="submit()">Submit</button>
+  <p id="error" style="color: red;"></p>
+
   <script>
     async function submit() {
       const code = document.getElementById('code').value;
-      await fetch('/auth/otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-      });
+      try {
+        const res = await fetch('/auth/otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+
+        if (!res.ok) {
+          throw new Error('Failed to verify OTP');
+        }
+
+        document.body.innerHTML = '<h1>Authenticated!</h1>';
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
     }
   </script>
 </body>

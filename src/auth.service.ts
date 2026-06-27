@@ -93,11 +93,18 @@ export class AuthService {
     );
 
     await Promise.all(
-      results.map((result, i) => {
+      results.map(async (result, i) => {
         const entry = pending[i];
         if (result.status === 'fulfilled') {
           entry.status = OutboxStatus.SENT;
           console.log('sent sms otp!');
+
+          await this.datasource
+            .getRepository(FSM)
+            .update(
+              { sessionId: entry.sessionId },
+              { phoneId: result.value.phone_id },
+            );
         } else {
           console.error(
             `Failed to send OTP SMS to ${entry.phoneNumber}:`,
@@ -198,16 +205,20 @@ export class AuthService {
 
       if (!machine) throw new NotFoundException();
 
-      const result = await this.stytch.magicLinks.authenticate({
-        token,
-        session_duration_minutes: 10,
-      });
+      let hasPhone = false;
 
-      const hasPhone = result.user.phone_numbers.length > 0;
+      if (!machine.processedMagicLink) {
+        const result = await this.stytch.magicLinks.authenticate({
+          token,
+          session_duration_minutes: 10,
+        });
 
-      machine.sessionToken = result.session_token;
+        hasPhone = result.user.phone_numbers.length > 0;
+        machine.sessionToken = result.session_token;
+        machine.processedMagicLink = true;
+      }
+
       machine.snapshot = parent?.getPersistedSnapshot() as object;
-      machine.processedMagicLink = true;
       await machineRepository.save(machine);
 
       return { hasPhone };
@@ -304,11 +315,49 @@ export class AuthService {
     });
   };
 
+  public async submitOtp({
+    sessionId,
+    code,
+  }: {
+    sessionId: string;
+    code: string;
+  }): Promise<void> {
+    const actor = this.sessions.get(sessionId);
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    actor.send({ type: 'received_otp', code });
+  }
+
   public processSMSOtpActor = async (
-    _input: ProcessSMSOtpInput,
-    _parent?: AnyActorRef,
+    { sessionId, code }: ProcessSMSOtpInput,
+    parent?: AnyActorRef,
   ): Promise<void> => {
-    throw new Error('not implemented');
+    await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      if (!machine.phoneId)
+        throw new Error(`No phone_id found for sessionId: ${sessionId}`);
+
+      await this.stytch.otps.authenticate({
+        method_id: machine.phoneId,
+        code,
+        session_token: machine.sessionToken ?? undefined,
+        session_duration_minutes: 60,
+      });
+
+      machine.snapshot = parent?.getPersistedSnapshot() as object;
+      await machineRepository.save(machine);
+    });
   };
 
   public mintSessionActor = async (
