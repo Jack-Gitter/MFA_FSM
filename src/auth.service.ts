@@ -5,7 +5,6 @@ import {
   AuthMachineContext,
   createAuthMachine,
   EnrollPhoneInput,
-  MintSessionInput,
   ProcessMagicLinkInput,
   ProcessMagicLinkOutput,
   ProcessSMSOtpInput,
@@ -360,13 +359,6 @@ export class AuthService {
     });
   };
 
-  public mintSessionActor = async (
-    _input: MintSessionInput,
-    _parent?: AnyActorRef,
-  ): Promise<void> => {
-    throw new Error('not implemented');
-  };
-
   public async createStateMachine(sessionId: string, email: string) {
     const machine = createAuthMachine({
       sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
@@ -375,7 +367,6 @@ export class AuthService {
       sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
       enrollPhone: (input, parent) => this.enrollPhoneActor(input, parent),
       processSMSOtp: (input, parent) => this.processSMSOtpActor(input, parent),
-      mintSession: (input, parent) => this.mintSessionActor(input, parent),
     });
 
     const actor = createActor(machine, {
@@ -418,7 +409,6 @@ export class AuthService {
         enrollPhone: (input, parent) => this.enrollPhoneActor(input, parent),
         processSMSOtp: (input, parent) =>
           this.processSMSOtpActor(input, parent),
-        mintSession: (input, parent) => this.mintSessionActor(input, parent),
       });
 
       const actor = createActor(machine, {

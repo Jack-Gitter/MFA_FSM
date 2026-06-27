@@ -16,7 +16,6 @@ export type ProcessMagicLinkOutput = { hasPhone: boolean };
 export type SendOTPSMSInput = { sessionId: string; email: string };
 export type EnrollPhoneInput = { sessionId: string; phoneNumber: string };
 export type ProcessSMSOtpInput = { sessionId: string; code: string };
-export type MintSessionInput = { sessionId: string };
 
 export const createAuthMachine = (actors: {
   sendMagicLink: (
@@ -33,7 +32,6 @@ export const createAuthMachine = (actors: {
     input: ProcessSMSOtpInput,
     parent?: AnyActorRef,
   ) => Promise<void>;
-  mintSession: (input: MintSessionInput, parent?: AnyActorRef) => Promise<void>;
 }) =>
   setup({
     types: {
@@ -59,9 +57,6 @@ export const createAuthMachine = (actors: {
       ),
       processSMSOtp: fromPromise<void, ProcessSMSOtpInput>(({ input, self }) =>
         actors.processSMSOtp(input, self._parent ?? undefined),
-      ),
-      mintSession: fromPromise<void, MintSessionInput>(({ input, self }) =>
-        actors.mintSession(input, self._parent ?? undefined),
       ),
     },
   }).createMachine({
@@ -169,21 +164,10 @@ export const createAuthMachine = (actors: {
                 sessionId: context.sessionId,
                 code: (event as { type: 'received_otp'; code: string }).code,
               }),
-              onDone: '#auth.mint_session',
+              onDone: '#auth.complete',
               onError: '#auth.error',
             },
           },
-        },
-      },
-
-      mint_session: {
-        invoke: {
-          src: 'mintSession',
-          input: ({ context }) => ({
-            sessionId: context.sessionId,
-          }),
-          onDone: 'complete',
-          onError: 'error',
         },
       },
 
