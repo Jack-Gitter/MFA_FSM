@@ -1,8 +1,8 @@
-import { Body, Controller, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { SendMagicLinkDto, SendMagicLinkResponse } from './dto/dto';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Response } from 'express';
+import { Response, Request } from 'express';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -25,5 +25,16 @@ export class AuthController {
     });
 
     return result;
+  }
+
+  @Get('authenticate')
+  @ApiOperation({ summary: 'Handle magic link callback' })
+  async authenticate(
+    @Query('token') token: string,
+    @Query('stytch_token_type') stytchTokenType: string,
+    @Req() req: Request,
+  ): Promise<void> {
+    const sessionId = req.cookies['sessionId'];
+    await this.authService.handleMagicLink({ sessionId, token });
   }
 }

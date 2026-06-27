@@ -10,11 +10,9 @@ export type AuthMachineEvents =
   | { type: 'received_otp'; code: string };
 
 export type SendMagicLinkInput = { sessionId: string; email: string };
-export type StoreMagicLinkTokenInput = { sessionId: string; token: string };
-export type ValidateMagicLinkInput = { sessionId: string };
+export type ProcessMagicLinkInput = { sessionId: string; token: string };
 export type SendOTPSMSInput = { sessionId: string };
-export type StoreOTPCodeInput = { sessionId: string; code: string };
-export type ValidateOTPSMSInput = { sessionId: string };
+export type ProcessSMSOtpInput = { sessionId: string; code: string };
 export type MintSessionInput = { sessionId: string };
 
 export const createAuthMachine = (actors: {
@@ -22,21 +20,13 @@ export const createAuthMachine = (actors: {
     input: SendMagicLinkInput,
     parent?: AnyActorRef,
   ) => Promise<void>;
-  storeMagicLinkToken: (
-    input: StoreMagicLinkTokenInput,
-    parent?: AnyActorRef,
-  ) => Promise<void>;
-  validateMagicLink: (
-    input: ValidateMagicLinkInput,
+  processMagicLink: (
+    input: ProcessMagicLinkInput,
     parent?: AnyActorRef,
   ) => Promise<void>;
   sendOTPSMS: (input: SendOTPSMSInput, parent?: AnyActorRef) => Promise<void>;
-  storeOTPCode: (
-    input: StoreOTPCodeInput,
-    parent?: AnyActorRef,
-  ) => Promise<void>;
-  validateOTPSMS: (
-    input: ValidateOTPSMSInput,
+  processSMSOtp: (
+    input: ProcessSMSOtpInput,
     parent?: AnyActorRef,
   ) => Promise<void>;
   mintSession: (input: MintSessionInput, parent?: AnyActorRef) => Promise<void>;
@@ -51,23 +41,15 @@ export const createAuthMachine = (actors: {
       sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input, self }) =>
         actors.sendMagicLink(input, self._parent ?? undefined),
       ),
-      storeMagicLinkToken: fromPromise<void, StoreMagicLinkTokenInput>(
+      processMagicLink: fromPromise<void, ProcessMagicLinkInput>(
         ({ input, self }) =>
-          actors.storeMagicLinkToken(input, self._parent ?? undefined),
-      ),
-      validateMagicLink: fromPromise<void, ValidateMagicLinkInput>(
-        ({ input, self }) =>
-          actors.validateMagicLink(input, self._parent ?? undefined),
+          actors.processMagicLink(input, self._parent ?? undefined),
       ),
       sendOTPSMS: fromPromise<void, SendOTPSMSInput>(({ input, self }) =>
         actors.sendOTPSMS(input, self._parent ?? undefined),
       ),
-      storeOTPCode: fromPromise<void, StoreOTPCodeInput>(({ input, self }) =>
-        actors.storeOTPCode(input, self._parent ?? undefined),
-      ),
-      validateOTPSMS: fromPromise<void, ValidateOTPSMSInput>(
-        ({ input, self }) =>
-          actors.validateOTPSMS(input, self._parent ?? undefined),
+      processSMSOtp: fromPromise<void, ProcessSMSOtpInput>(({ input, self }) =>
+        actors.processSMSOtp(input, self._parent ?? undefined),
       ),
       mintSession: fromPromise<void, MintSessionInput>(({ input, self }) =>
         actors.mintSession(input, self._parent ?? undefined),
@@ -88,42 +70,31 @@ export const createAuthMachine = (actors: {
             sessionId: context.sessionId,
             email: context.email,
           }),
-          onDone: 'waiting_for_magic_link_input',
+          onDone: 'processing_magic_link',
           onError: 'error',
         },
       },
 
-      waiting_for_magic_link_input: {
-        initial: 'idle',
+      processing_magic_link: {
+        initial: 'waiting',
         states: {
-          idle: {
+          waiting: {
             on: {
-              received_magic_link: 'storing',
+              received_magic_link: 'processing',
             },
           },
-          storing: {
+          processing: {
             invoke: {
-              src: 'storeMagicLinkToken',
+              src: 'processMagicLink',
               input: ({ context, event }) => ({
                 sessionId: context.sessionId,
                 token: (event as { type: 'received_magic_link'; token: string })
                   .token,
               }),
-              onDone: '#auth.validate_magic_link',
+              onDone: '#auth.send_sms_otp',
               onError: '#auth.error',
             },
           },
-        },
-      },
-
-      validate_magic_link: {
-        invoke: {
-          src: 'validateMagicLink',
-          input: ({ context }) => ({
-            sessionId: context.sessionId,
-          }),
-          onDone: 'send_sms_otp',
-          onError: 'error',
         },
       },
 
@@ -133,41 +104,30 @@ export const createAuthMachine = (actors: {
           input: ({ context }) => ({
             sessionId: context.sessionId,
           }),
-          onDone: 'waiting_for_otp_input',
+          onDone: 'processing_sms_otp',
           onError: 'error',
         },
       },
 
-      waiting_for_otp_input: {
-        initial: 'idle',
+      processing_sms_otp: {
+        initial: 'waiting',
         states: {
-          idle: {
+          waiting: {
             on: {
-              received_otp: 'storing',
+              received_otp: 'processing',
             },
           },
-          storing: {
+          processing: {
             invoke: {
-              src: 'storeOTPCode',
+              src: 'processSMSOtp',
               input: ({ context, event }) => ({
                 sessionId: context.sessionId,
                 code: (event as { type: 'received_otp'; code: string }).code,
               }),
-              onDone: '#auth.validate_sms_otp',
+              onDone: '#auth.mint_session',
               onError: '#auth.error',
             },
           },
-        },
-      },
-
-      validate_sms_otp: {
-        invoke: {
-          src: 'validateOTPSMS',
-          input: ({ context }) => ({
-            sessionId: context.sessionId,
-          }),
-          onDone: 'mint_session',
-          onError: 'error',
         },
       },
 

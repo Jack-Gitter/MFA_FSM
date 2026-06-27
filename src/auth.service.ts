@@ -5,12 +5,10 @@ import {
   AuthMachineContext,
   createAuthMachine,
   MintSessionInput,
+  ProcessMagicLinkInput,
+  ProcessSMSOtpInput,
   SendMagicLinkInput,
   SendOTPSMSInput,
-  StoreMagicLinkTokenInput,
-  StoreOTPCodeInput,
-  ValidateMagicLinkInput,
-  ValidateOTPSMSInput,
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
@@ -83,6 +81,22 @@ export class AuthService {
     return { sessionId };
   };
 
+  public async handleMagicLink({
+    sessionId,
+    token,
+  }: {
+    sessionId: string;
+    token: string;
+  }): Promise<void> {
+    const actor = this.sessions.get(sessionId);
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    actor.send({ type: 'received_magic_link', token });
+  }
+
   public sendMagicLinkActor = async (
     { sessionId, email }: SendMagicLinkInput,
     parent?: AnyActorRef,
@@ -115,15 +129,8 @@ export class AuthService {
     });
   };
 
-  public storeMagicLinkTokenActor = async (
-    _input: StoreMagicLinkTokenInput,
-    _parent?: AnyActorRef,
-  ): Promise<void> => {
-    throw new Error('not implemented');
-  };
-
-  public validateMagicLinkActor = async (
-    _input: ValidateMagicLinkInput,
+  public processMagicLinkActor = async (
+    _input: ProcessMagicLinkInput,
     _parent?: AnyActorRef,
   ): Promise<void> => {
     throw new Error('not implemented');
@@ -136,15 +143,8 @@ export class AuthService {
     throw new Error('not implemented');
   };
 
-  public storeOTPCodeActor = async (
-    _input: StoreOTPCodeInput,
-    _parent?: AnyActorRef,
-  ): Promise<void> => {
-    throw new Error('not implemented');
-  };
-
-  public validateOTPSMSActor = async (
-    _input: ValidateOTPSMSInput,
+  public processSMSOtpActor = async (
+    _input: ProcessSMSOtpInput,
     _parent?: AnyActorRef,
   ): Promise<void> => {
     throw new Error('not implemented');
@@ -160,14 +160,10 @@ export class AuthService {
   public createStateMachine(sessionId: string, email: string) {
     const machine = createAuthMachine({
       sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
-      storeMagicLinkToken: (input, parent) =>
-        this.storeMagicLinkTokenActor(input, parent),
-      validateMagicLink: (input, parent) =>
-        this.validateMagicLinkActor(input, parent),
+      processMagicLink: (input, parent) =>
+        this.processMagicLinkActor(input, parent),
       sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
-      storeOTPCode: (input, parent) => this.storeOTPCodeActor(input, parent),
-      validateOTPSMS: (input, parent) =>
-        this.validateOTPSMSActor(input, parent),
+      processSMSOtp: (input, parent) => this.processSMSOtpActor(input, parent),
       mintSession: (input, parent) => this.mintSessionActor(input, parent),
     });
 
@@ -194,14 +190,11 @@ export class AuthService {
       const machine = createAuthMachine({
         sendMagicLink: (input, parent) =>
           this.sendMagicLinkActor(input, parent),
-        storeMagicLinkToken: (input, parent) =>
-          this.storeMagicLinkTokenActor(input, parent),
-        validateMagicLink: (input, parent) =>
-          this.validateMagicLinkActor(input, parent),
+        processMagicLink: (input, parent) =>
+          this.processMagicLinkActor(input, parent),
         sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
-        storeOTPCode: (input, parent) => this.storeOTPCodeActor(input, parent),
-        validateOTPSMS: (input, parent) =>
-          this.validateOTPSMSActor(input, parent),
+        processSMSOtp: (input, parent) =>
+          this.processSMSOtpActor(input, parent),
         mintSession: (input, parent) => this.mintSessionActor(input, parent),
       });
 
