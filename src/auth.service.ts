@@ -181,8 +181,8 @@ export class AuthService {
 
     const records = await repo
       .createQueryBuilder('fsm')
-      .where(`fsm.last_transition->>'current' NOT IN (:...states)`, {
-        states: ['authenticated', 'idle'],
+      .where(`fsm.snapshot->>'status' NOT IN (:...statuses)`, {
+        statuses: ['done', 'error', 'stopped'],
       })
       .orderBy('fsm.created_at', 'DESC')
       .getMany();
