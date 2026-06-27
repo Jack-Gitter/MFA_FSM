@@ -22,12 +22,24 @@ export const createAuthMachine = (actors: {
     input: SendMagicLinkInput,
     parent?: AnyActorRef,
   ) => Promise<void>;
-  storeMagicLinkToken: (input: StoreMagicLinkTokenInput) => Promise<void>;
-  validateMagicLink: (input: ValidateMagicLinkInput) => Promise<void>;
-  sendOTPSMS: (input: SendOTPSMSInput) => Promise<void>;
-  storeOTPCode: (input: StoreOTPCodeInput) => Promise<void>;
-  validateOTPSMS: (input: ValidateOTPSMSInput) => Promise<void>;
-  mintSession: (input: MintSessionInput) => Promise<void>;
+  storeMagicLinkToken: (
+    input: StoreMagicLinkTokenInput,
+    parent?: AnyActorRef,
+  ) => Promise<void>;
+  validateMagicLink: (
+    input: ValidateMagicLinkInput,
+    parent?: AnyActorRef,
+  ) => Promise<void>;
+  sendOTPSMS: (input: SendOTPSMSInput, parent?: AnyActorRef) => Promise<void>;
+  storeOTPCode: (
+    input: StoreOTPCodeInput,
+    parent?: AnyActorRef,
+  ) => Promise<void>;
+  validateOTPSMS: (
+    input: ValidateOTPSMSInput,
+    parent?: AnyActorRef,
+  ) => Promise<void>;
+  mintSession: (input: MintSessionInput, parent?: AnyActorRef) => Promise<void>;
 }) =>
   setup({
     types: {
@@ -40,22 +52,25 @@ export const createAuthMachine = (actors: {
         actors.sendMagicLink(input, self._parent ?? undefined),
       ),
       storeMagicLinkToken: fromPromise<void, StoreMagicLinkTokenInput>(
-        ({ input }) => actors.storeMagicLinkToken(input),
+        ({ input, self }) =>
+          actors.storeMagicLinkToken(input, self._parent ?? undefined),
       ),
       validateMagicLink: fromPromise<void, ValidateMagicLinkInput>(
-        ({ input }) => actors.validateMagicLink(input),
+        ({ input, self }) =>
+          actors.validateMagicLink(input, self._parent ?? undefined),
       ),
-      sendOTPSMS: fromPromise<void, SendOTPSMSInput>(({ input }) =>
-        actors.sendOTPSMS(input),
+      sendOTPSMS: fromPromise<void, SendOTPSMSInput>(({ input, self }) =>
+        actors.sendOTPSMS(input, self._parent ?? undefined),
       ),
-      storeOTPCode: fromPromise<void, StoreOTPCodeInput>(({ input }) =>
-        actors.storeOTPCode(input),
+      storeOTPCode: fromPromise<void, StoreOTPCodeInput>(({ input, self }) =>
+        actors.storeOTPCode(input, self._parent ?? undefined),
       ),
-      validateOTPSMS: fromPromise<void, ValidateOTPSMSInput>(({ input }) =>
-        actors.validateOTPSMS(input),
+      validateOTPSMS: fromPromise<void, ValidateOTPSMSInput>(
+        ({ input, self }) =>
+          actors.validateOTPSMS(input, self._parent ?? undefined),
       ),
-      mintSession: fromPromise<void, MintSessionInput>(({ input }) =>
-        actors.mintSession(input),
+      mintSession: fromPromise<void, MintSessionInput>(({ input, self }) =>
+        actors.mintSession(input, self._parent ?? undefined),
       ),
     },
   }).createMachine({

@@ -117,45 +117,58 @@ export class AuthService {
 
   public storeMagicLinkTokenActor = async (
     _input: StoreMagicLinkTokenInput,
+    _parent?: AnyActorRef,
   ): Promise<void> => {
     throw new Error('not implemented');
   };
 
   public validateMagicLinkActor = async (
     _input: ValidateMagicLinkInput,
+    _parent?: AnyActorRef,
   ): Promise<void> => {
     throw new Error('not implemented');
   };
 
-  public sendOTPSMSActor = async (_input: SendOTPSMSInput): Promise<void> => {
+  public sendOTPSMSActor = async (
+    _input: SendOTPSMSInput,
+    _parent?: AnyActorRef,
+  ): Promise<void> => {
     throw new Error('not implemented');
   };
 
   public storeOTPCodeActor = async (
     _input: StoreOTPCodeInput,
+    _parent?: AnyActorRef,
   ): Promise<void> => {
     throw new Error('not implemented');
   };
 
   public validateOTPSMSActor = async (
     _input: ValidateOTPSMSInput,
+    _parent?: AnyActorRef,
   ): Promise<void> => {
     throw new Error('not implemented');
   };
 
-  public mintSessionActor = async (_input: MintSessionInput): Promise<void> => {
+  public mintSessionActor = async (
+    _input: MintSessionInput,
+    _parent?: AnyActorRef,
+  ): Promise<void> => {
     throw new Error('not implemented');
   };
 
   public createStateMachine(sessionId: string, email: string) {
     const machine = createAuthMachine({
       sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
-      storeMagicLinkToken: (input) => this.storeMagicLinkTokenActor(input),
-      validateMagicLink: (input) => this.validateMagicLinkActor(input),
-      sendOTPSMS: (input) => this.sendOTPSMSActor(input),
-      storeOTPCode: (input) => this.storeOTPCodeActor(input),
-      validateOTPSMS: (input) => this.validateOTPSMSActor(input),
-      mintSession: (input) => this.mintSessionActor(input),
+      storeMagicLinkToken: (input, parent) =>
+        this.storeMagicLinkTokenActor(input, parent),
+      validateMagicLink: (input, parent) =>
+        this.validateMagicLinkActor(input, parent),
+      sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
+      storeOTPCode: (input, parent) => this.storeOTPCodeActor(input, parent),
+      validateOTPSMS: (input, parent) =>
+        this.validateOTPSMSActor(input, parent),
+      mintSession: (input, parent) => this.mintSessionActor(input, parent),
     });
 
     return createActor(machine, {
@@ -181,12 +194,15 @@ export class AuthService {
       const machine = createAuthMachine({
         sendMagicLink: (input, parent) =>
           this.sendMagicLinkActor(input, parent),
-        storeMagicLinkToken: (input) => this.storeMagicLinkTokenActor(input),
-        validateMagicLink: (input) => this.validateMagicLinkActor(input),
-        sendOTPSMS: (input) => this.sendOTPSMSActor(input),
-        storeOTPCode: (input) => this.storeOTPCodeActor(input),
-        validateOTPSMS: (input) => this.validateOTPSMSActor(input),
-        mintSession: (input) => this.mintSessionActor(input),
+        storeMagicLinkToken: (input, parent) =>
+          this.storeMagicLinkTokenActor(input, parent),
+        validateMagicLink: (input, parent) =>
+          this.validateMagicLinkActor(input, parent),
+        sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
+        storeOTPCode: (input, parent) => this.storeOTPCodeActor(input, parent),
+        validateOTPSMS: (input, parent) =>
+          this.validateOTPSMSActor(input, parent),
+        mintSession: (input, parent) => this.mintSessionActor(input, parent),
       });
 
       const actor = createActor(machine, {
