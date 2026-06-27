@@ -87,6 +87,7 @@ export class AuthService {
   ) => {
     await this.datasource.transaction(async (manager) => {
       const outboxRepository = manager.getRepository(MagicLinkOutbox);
+      const machineRepository = manager.getRepository(FSM);
 
       const row = await outboxRepository.findOne({
         where: { email },
@@ -102,10 +103,12 @@ export class AuthService {
         await outboxRepository.save(outboxMessage);
       }
 
-      const machine = new FSM();
-      machine.sessionId = sessionId;
-      machine.snapshot = parent?.getPersistedSnapshot() as object;
-      await manager.save(machine);
+      const snapshot = machineRepository.create({
+        sessionId: sessionId,
+        snapshot: parent?.getPersistedSnapshot() as object,
+      });
+
+      await manager.save(snapshot);
     });
   };
 
