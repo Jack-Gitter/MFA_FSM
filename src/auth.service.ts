@@ -80,22 +80,6 @@ export class AuthService {
     return { sessionId };
   };
 
-  public async handleMagicLink({
-    sessionId,
-    token,
-  }: {
-    sessionId: string;
-    token: string;
-  }): Promise<void> {
-    const actor = this.sessions.get(sessionId);
-
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
-
-    actor.send({ type: 'received_magic_link', token });
-  }
-
   public sendMagicLinkActor = async (
     { sessionId, email }: SendMagicLinkInput,
     parent?: AnyActorRef,
@@ -131,6 +115,22 @@ export class AuthService {
       await manager.save(machine);
     });
   };
+
+  public async handleMagicLink({
+    sessionId,
+    token,
+  }: {
+    sessionId: string;
+    token: string;
+  }): Promise<void> {
+    const actor = this.sessions.get(sessionId);
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    actor.send({ type: 'received_magic_link', token });
+  }
 
   public processMagicLinkActor = async (
     { sessionId, token }: ProcessMagicLinkInput,
