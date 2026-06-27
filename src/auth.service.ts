@@ -130,12 +130,18 @@ export class AuthService {
   };
 
   public processMagicLinkActor = async (
-    _input: ProcessMagicLinkInput,
-    _parent?: AnyActorRef,
+    { sessionId, token }: ProcessMagicLinkInput,
+    parent?: AnyActorRef,
   ): Promise<void> => {
-    throw new Error('not implemented');
-  };
+    await this.stytch.magicLinks.authenticate({ token });
 
+    await this.datasource
+      .getRepository(FSM)
+      .update(
+        { sessionId },
+        { snapshot: parent?.getPersistedSnapshot() as object },
+      );
+  };
   public sendOTPSMSActor = async (
     _input: SendOTPSMSInput,
     _parent?: AnyActorRef,

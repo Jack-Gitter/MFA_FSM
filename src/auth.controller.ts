@@ -31,7 +31,6 @@ export class AuthController {
   @ApiOperation({ summary: 'Handle magic link callback' })
   async authenticate(
     @Query('token') token: string,
-    @Query('stytch_token_type') stytchTokenType: string,
     @Req() req: Request,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
