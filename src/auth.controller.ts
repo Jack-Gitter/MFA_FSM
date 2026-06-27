@@ -14,7 +14,6 @@ export class AuthController {
   async sendMagicLink(
     @Body() dto: SendMagicLinkDto,
   ): Promise<SendMagicLinkResponse> {
-    const { sessionId } = await this.authService.sendMagicLink(dto.email);
-    return { sessionId };
+    return await this.authService.sendMagicLink(dto.email);
   }
 }
