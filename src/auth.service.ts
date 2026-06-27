@@ -86,16 +86,24 @@ export class AuthService {
     parent?: AnyActorRef,
   ) => {
     await this.datasource.transaction(async (manager) => {
-      const outbox = new MagicLinkOutbox();
-      outbox.email = email;
-      await manager.save(outbox);
+      const outboxRepository = manager.getRepository(MagicLinkOutbox);
+
+      const row = await outboxRepository.findOne({
+        where: { email },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!row) {
+        const outboxMessage = outboxRepository.create({
+          email: email,
+          status: OutboxStatus.PENDING,
+        });
+
+        await outboxRepository.save(outboxMessage);
+      }
 
       const machine = new FSM();
       machine.sessionId = sessionId;
-      machine.lastTransition = {
-        prev: 'sending_magic_link',
-        current: 'awaiting_magic_link',
-      };
       machine.snapshot = parent?.getPersistedSnapshot() as object;
       await manager.save(machine);
     });

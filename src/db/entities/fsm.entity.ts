@@ -17,9 +17,6 @@ export class FSM {
   @Column({ type: 'jsonb' })
   snapshot: object;
 
-  @Column({ type: 'jsonb', name: 'last_transition' })
-  lastTransition: { prev: string; current: string };
-
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
