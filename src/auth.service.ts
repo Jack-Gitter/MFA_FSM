@@ -7,10 +7,10 @@ import {
   EnrollPhoneInput,
   MintSessionInput,
   ProcessMagicLinkInput,
+  ProcessMagicLinkOutput,
   ProcessSMSOtpInput,
   SendMagicLinkInput,
   SendOTPSMSInput,
-  SendOTPSMSOutput,
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
@@ -80,6 +80,38 @@ export class AuthService {
     return { sessionId };
   };
 
+  public async handleMagicLink({
+    sessionId,
+    token,
+  }: {
+    sessionId: string;
+    token: string;
+  }): Promise<{ hasPhone: boolean }> {
+    const actor = this.sessions.get(sessionId);
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    actor.send({ type: 'received_magic_link', token });
+
+    const snapshot = actor.getSnapshot();
+    const email = snapshot.context.email;
+
+    const searchResult = await this.stytch.users.search({
+      query: {
+        operator: 'AND',
+        operands: [{ filter_name: 'email_address', filter_value: [email] }],
+      },
+    });
+
+    const user = searchResult.results[0];
+
+    if (!user) throw new Error(`No Stytch user found for email: ${email}`);
+
+    return { hasPhone: user.phone_numbers.length > 0 };
+  }
+
   public sendMagicLinkActor = async (
     { sessionId, email }: SendMagicLinkInput,
     parent?: AnyActorRef,
@@ -111,31 +143,14 @@ export class AuthService {
       }
 
       machine.snapshot = parent?.getPersistedSnapshot() as object;
-
       await manager.save(machine);
     });
   };
 
-  public async handleMagicLink({
-    sessionId,
-    token,
-  }: {
-    sessionId: string;
-    token: string;
-  }): Promise<void> {
-    const actor = this.sessions.get(sessionId);
-
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
-
-    actor.send({ type: 'received_magic_link', token });
-  }
-
   public processMagicLinkActor = async (
     { sessionId, token }: ProcessMagicLinkInput,
     parent?: AnyActorRef,
-  ): Promise<void> => {
+  ): Promise<ProcessMagicLinkOutput> => {
     return await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
 
@@ -146,21 +161,21 @@ export class AuthService {
 
       if (!machine) throw new NotFoundException();
 
-      if (!machine.processedMagicLink) {
-        await this.stytch.magicLinks.authenticate({ token });
-      }
+      const result = await this.stytch.magicLinks.authenticate({ token });
+      const hasPhone = result.user.phone_numbers.length > 0;
 
       machine.snapshot = parent?.getPersistedSnapshot() as object;
       machine.processedMagicLink = true;
-
       await machineRepository.save(machine);
+
+      return { hasPhone };
     });
   };
 
   public sendOTPSMSActor = async (
     { sessionId, email }: SendOTPSMSInput,
     parent?: AnyActorRef,
-  ): Promise<SendOTPSMSOutput> => {
+  ): Promise<void> => {
     return await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
 
@@ -180,25 +195,17 @@ export class AuthService {
 
       const user = searchResult.results[0];
 
-      if (!user) {
-        throw new Error(`No Stytch user found for email: ${email}`);
-      }
+      if (!user) throw new Error(`No Stytch user found for email: ${email}`);
 
       const phoneNumber = user.phone_numbers?.[0]?.phone_number;
 
-      if (!phoneNumber) {
-        machine.snapshot = parent?.getPersistedSnapshot() as object;
-        await machineRepository.save(machine);
-
-        return { hasPhone: false };
-      }
+      if (!phoneNumber)
+        throw new Error(`No phone number found for email: ${email}`);
 
       await this.stytch.otps.sms.send({ phone_number: phoneNumber });
 
       machine.snapshot = parent?.getPersistedSnapshot() as object;
       await machineRepository.save(machine);
-
-      return { hasPhone: true };
     });
   };
 
@@ -244,7 +251,7 @@ export class AuthService {
     const fsmRepository = this.datasource.getRepository(FSM);
     const fsm = fsmRepository.create({
       sessionId,
-      snapshot: actor.getPersistedSnapshot(),
+      snapshot: actor.getPersistedSnapshot() as object,
     });
 
     await fsmRepository.save(fsm);
