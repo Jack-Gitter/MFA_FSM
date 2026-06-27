@@ -146,7 +146,9 @@ export class AuthService {
       lock: { mode: 'pessimistic_write' },
     });
 
-    if (!machine?.processedMagicLink) {
+    if (!machine) throw new NotFoundException();
+
+    if (!machine.processedMagicLink) {
       await this.stytch.magicLinks.authenticate({ token });
     }
 
