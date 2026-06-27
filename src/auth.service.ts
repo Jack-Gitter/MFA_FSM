@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Actor, AnyActorRef, createActor, Snapshot } from 'xstate';
 import {
@@ -107,6 +107,13 @@ export class AuthService {
       const outboxRepository = manager.getRepository(MagicLinkOutbox);
       const machineRepository = manager.getRepository(FSM);
 
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
       const row = await outboxRepository.findOne({
         where: { email, sessionId },
         lock: { mode: 'pessimistic_write' },
@@ -122,12 +129,9 @@ export class AuthService {
         await outboxRepository.save(outboxMessage);
       }
 
-      const snapshot = machineRepository.create({
-        sessionId,
-        snapshot: parent?.getPersistedSnapshot() as object,
-      });
+      machine.snapshot = parent?.getPersistedSnapshot() as object;
 
-      await manager.save(snapshot);
+      await manager.save(machine);
     });
   };
 
@@ -135,7 +139,16 @@ export class AuthService {
     { sessionId, token }: ProcessMagicLinkInput,
     parent?: AnyActorRef,
   ): Promise<void> => {
-    await this.stytch.magicLinks.authenticate({ token });
+    const machineRepository = this.datasource.getRepository(FSM);
+
+    const machine = await machineRepository.findOne({
+      where: { sessionId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    if (!machine?.processedMagicLink) {
+      await this.stytch.magicLinks.authenticate({ token });
+    }
 
     await this.datasource.getRepository(FSM).update(
       { sessionId },

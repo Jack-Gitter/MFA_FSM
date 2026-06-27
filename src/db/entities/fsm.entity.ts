@@ -20,6 +20,6 @@ export class FSM {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @Column({ name: 'processed_magic_link' })
+  @Column({ name: 'processed_magic_link', default: false })
   processedMagicLink: boolean;
 }
