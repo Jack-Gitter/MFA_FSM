@@ -4,11 +4,13 @@ import { Actor, AnyActorRef, createActor, Snapshot } from 'xstate';
 import {
   AuthMachineContext,
   createAuthMachine,
+  EnrollPhoneInput,
   MintSessionInput,
   ProcessMagicLinkInput,
   ProcessSMSOtpInput,
   SendMagicLinkInput,
   SendOTPSMSInput,
+  SendOTPSMSOutput,
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
@@ -121,7 +123,7 @@ export class AuthService {
       }
 
       const snapshot = machineRepository.create({
-        sessionId: sessionId,
+        sessionId,
         snapshot: parent?.getPersistedSnapshot() as object,
       });
 
@@ -142,8 +144,16 @@ export class AuthService {
         { snapshot: parent?.getPersistedSnapshot() as object },
       );
   };
+
   public sendOTPSMSActor = async (
     _input: SendOTPSMSInput,
+    _parent?: AnyActorRef,
+  ): Promise<SendOTPSMSOutput> => {
+    throw new Error('not implemented');
+  };
+
+  public enrollPhoneActor = async (
+    _input: EnrollPhoneInput,
     _parent?: AnyActorRef,
   ): Promise<void> => {
     throw new Error('not implemented');
@@ -169,6 +179,7 @@ export class AuthService {
       processMagicLink: (input, parent) =>
         this.processMagicLinkActor(input, parent),
       sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
+      enrollPhone: (input, parent) => this.enrollPhoneActor(input, parent),
       processSMSOtp: (input, parent) => this.processSMSOtpActor(input, parent),
       mintSession: (input, parent) => this.mintSessionActor(input, parent),
     });
@@ -199,6 +210,7 @@ export class AuthService {
         processMagicLink: (input, parent) =>
           this.processMagicLinkActor(input, parent),
         sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
+        enrollPhone: (input, parent) => this.enrollPhoneActor(input, parent),
         processSMSOtp: (input, parent) =>
           this.processSMSOtpActor(input, parent),
         mintSession: (input, parent) => this.mintSessionActor(input, parent),

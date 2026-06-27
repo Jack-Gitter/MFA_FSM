@@ -7,11 +7,14 @@ export type AuthMachineContext = {
 
 export type AuthMachineEvents =
   | { type: 'received_magic_link'; token: string }
-  | { type: 'received_otp'; code: string };
+  | { type: 'received_otp'; code: string }
+  | { type: 'received_phone_number'; phoneNumber: string };
 
 export type SendMagicLinkInput = { sessionId: string; email: string };
 export type ProcessMagicLinkInput = { sessionId: string; token: string };
-export type SendOTPSMSInput = { sessionId: string };
+export type SendOTPSMSInput = { sessionId: string; email: string };
+export type SendOTPSMSOutput = { hasPhone: boolean };
+export type EnrollPhoneInput = { sessionId: string; phoneNumber: string };
 export type ProcessSMSOtpInput = { sessionId: string; code: string };
 export type MintSessionInput = { sessionId: string };
 
@@ -24,7 +27,11 @@ export const createAuthMachine = (actors: {
     input: ProcessMagicLinkInput,
     parent?: AnyActorRef,
   ) => Promise<void>;
-  sendOTPSMS: (input: SendOTPSMSInput, parent?: AnyActorRef) => Promise<void>;
+  sendOTPSMS: (
+    input: SendOTPSMSInput,
+    parent?: AnyActorRef,
+  ) => Promise<SendOTPSMSOutput>;
+  enrollPhone: (input: EnrollPhoneInput, parent?: AnyActorRef) => Promise<void>;
   processSMSOtp: (
     input: ProcessSMSOtpInput,
     parent?: AnyActorRef,
@@ -45,8 +52,12 @@ export const createAuthMachine = (actors: {
         ({ input, self }) =>
           actors.processMagicLink(input, self._parent ?? undefined),
       ),
-      sendOTPSMS: fromPromise<void, SendOTPSMSInput>(({ input, self }) =>
-        actors.sendOTPSMS(input, self._parent ?? undefined),
+      sendOTPSMS: fromPromise<SendOTPSMSOutput, SendOTPSMSInput>(
+        ({ input, self }) =>
+          actors.sendOTPSMS(input, self._parent ?? undefined),
+      ),
+      enrollPhone: fromPromise<void, EnrollPhoneInput>(({ input, self }) =>
+        actors.enrollPhone(input, self._parent ?? undefined),
       ),
       processSMSOtp: fromPromise<void, ProcessSMSOtpInput>(({ input, self }) =>
         actors.processSMSOtp(input, self._parent ?? undefined),
@@ -103,9 +114,45 @@ export const createAuthMachine = (actors: {
           src: 'sendOTPSMS',
           input: ({ context }) => ({
             sessionId: context.sessionId,
+            email: context.email,
           }),
-          onDone: 'processing_sms_otp',
+          onDone: [
+            {
+              guard: ({ event }) => event.output.hasPhone === false,
+              target: 'processing_phone_enrollment',
+            },
+            {
+              target: 'processing_sms_otp',
+            },
+          ],
           onError: 'error',
+        },
+      },
+
+      processing_phone_enrollment: {
+        initial: 'waiting',
+        states: {
+          waiting: {
+            on: {
+              received_phone_number: 'processing',
+            },
+          },
+          processing: {
+            invoke: {
+              src: 'enrollPhone',
+              input: ({ context, event }) => ({
+                sessionId: context.sessionId,
+                phoneNumber: (
+                  event as {
+                    type: 'received_phone_number';
+                    phoneNumber: string;
+                  }
+                ).phoneNumber,
+              }),
+              onDone: '#auth.send_sms_otp',
+              onError: '#auth.error',
+            },
+          },
         },
       },
 
