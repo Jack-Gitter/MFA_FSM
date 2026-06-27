@@ -36,8 +36,8 @@ export const createAuthMachine = (actors: {
       input: {} as { sessionId: string; email: string },
     },
     actors: {
-      sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input }) =>
-        actors.sendMagicLink(input),
+      sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input, self }) =>
+        actors.sendMagicLink(input, self._parent ?? undefined),
       ),
       storeMagicLinkToken: fromPromise<void, StoreMagicLinkTokenInput>(
         ({ input }) => actors.storeMagicLinkToken(input),
