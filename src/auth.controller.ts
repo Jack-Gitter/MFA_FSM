@@ -7,6 +7,7 @@ import {
 } from './dto/dto';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Response, Request } from 'express';
+import { join } from 'path';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -32,7 +33,6 @@ export class AuthController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Handle magic link callback' })
   async authenticate(
     @Query('token') token: string,
     @Req() req: any,
@@ -45,9 +45,9 @@ export class AuthController {
     });
 
     if (hasPhone) {
-      res.redirect(`http://localhost:8080/otp`);
+      res.redirect('/auth/otp');
     } else {
-      res.redirect(`http://localhost:8080/otp/register`);
+      res.redirect('/auth/enroll-phone');
     }
   }
 
@@ -63,6 +63,13 @@ export class AuthController {
     });
   }
 
-  @Post()
-  async submitOtpSms() {}
+  @Get('otp')
+  async otpPage(@Res() res: Response): Promise<void> {
+    res.sendFile(join(process.cwd(), 'public', 'otp.html'));
+  }
+
+  @Get('enroll-phone')
+  async enrollPhonePage(@Res() res: Response): Promise<void> {
+    res.sendFile(join(process.cwd(), 'public', 'enroll-phone.html'));
+  }
 }

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head><title>Enroll Phone</title></head>
+<body>
+  <h1>Enter your phone number</h1>
+  <input type="tel" id="phoneNumber" placeholder="+12025550162" />
+  <button type="button" onclick="submit()">Submit</button>
+  <p id="error" style="color: red;"></p>
+
+  <script>
+    async function submit() {
+      const phoneNumber = document.getElementById('phoneNumber').value;
+      try {
+        const res = await fetch('/auth/enroll-phone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber }),
+        });
+
+        if (!res.ok) {
+          throw new Error('Failed to enroll phone');
+        }
+
+        window.location.href = '/auth/otp';
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    }
+  </script>
+</body>
+</html>

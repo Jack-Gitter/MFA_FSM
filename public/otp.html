@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>Enter OTP</title></head>
+<body>
+  <h1>Enter your OTP code</h1>
+  <form>
+    <input type="text" id="code" placeholder="123456" maxlength="6" />
+    <button type="button" onclick="submit()">Submit</button>
+  </form>
+  <script>
+    async function submit() {
+      const code = document.getElementById('code').value;
+      await fetch('/auth/otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+    }
+  </script>
+</body>
+</html>
