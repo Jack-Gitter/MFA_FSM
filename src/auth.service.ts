@@ -116,27 +116,31 @@ export class AuthService {
     );
   }
 
+  private subscribeToActor(sessionId: string, actor: Actor<AuthActor>): void {
+    actor.subscribe((snapshot) => {
+      this.datasource
+        .getRepository(FSM)
+        .upsert({ sessionId, snapshot: snapshot.toJSON() as object }, [
+          'sessionId',
+        ])
+        .catch((err) =>
+          console.error(`Failed to persist snapshot for ${sessionId}:`, err),
+        );
+    });
+  }
+
   public sendMagicLink = async (email: string) => {
     const sessionId = crypto.randomUUID();
     await this.createStateMachine(sessionId, email);
-
     return { sessionId };
   };
 
-  public sendMagicLinkActor = async (
-    { sessionId, email }: SendMagicLinkInput,
-    parent?: AnyActorRef,
-  ) => {
+  public sendMagicLinkActor = async ({
+    sessionId,
+    email,
+  }: SendMagicLinkInput) => {
     await this.datasource.transaction(async (manager) => {
       const outboxRepository = manager.getRepository(MagicLinkOutbox);
-      const machineRepository = manager.getRepository(FSM);
-
-      const machine = await machineRepository.findOne({
-        where: { sessionId },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!machine) throw new NotFoundException();
 
       const row = await outboxRepository.findOne({
         where: { email, sessionId },
@@ -152,9 +156,6 @@ export class AuthService {
 
         await outboxRepository.save(outboxMessage);
       }
-
-      machine.snapshot = parent?.getPersistedSnapshot() as object;
-      await manager.save(machine);
     });
   };
 
@@ -184,16 +185,15 @@ export class AuthService {
     });
 
     const user = searchResult.results[0];
-
     if (!user) throw new Error(`No Stytch user found for email: ${email}`);
 
     return { hasPhone: user.phone_numbers.length > 0 };
   }
 
-  public processMagicLinkActor = async (
-    { sessionId, token }: ProcessMagicLinkInput,
-    parent?: AnyActorRef,
-  ): Promise<ProcessMagicLinkOutput> => {
+  public processMagicLinkActor = async ({
+    sessionId,
+    token,
+  }: ProcessMagicLinkInput): Promise<ProcessMagicLinkOutput> => {
     return await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
 
@@ -215,19 +215,17 @@ export class AuthService {
         hasPhone = result.user.phone_numbers.length > 0;
         machine.sessionToken = result.session_token;
         machine.processedMagicLink = true;
+        await machineRepository.save(machine);
       }
-
-      machine.snapshot = parent?.getPersistedSnapshot() as object;
-      await machineRepository.save(machine);
 
       return { hasPhone };
     });
   };
 
-  public sendOTPSMSActor = async (
-    { sessionId, email }: SendOTPSMSInput,
-    parent?: AnyActorRef,
-  ): Promise<void> => {
+  public sendOTPSMSActor = async ({
+    sessionId,
+    email,
+  }: SendOTPSMSInput): Promise<void> => {
     await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
       const outboxRepository = manager.getRepository(SMSOTPOutbox);
@@ -272,9 +270,6 @@ export class AuthService {
 
         await outboxRepository.save(outboxMessage);
       }
-
-      machine.snapshot = parent?.getPersistedSnapshot() as object;
-      await machineRepository.save(machine);
     });
   };
 
@@ -294,10 +289,10 @@ export class AuthService {
     actor.send({ type: 'received_phone_number', phoneNumber });
   }
 
-  public enrollPhoneActor = async (
-    { sessionId, phoneNumber }: EnrollPhoneInput,
-    parent?: AnyActorRef,
-  ): Promise<void> => {
+  public enrollPhoneActor = async ({
+    sessionId,
+    phoneNumber,
+  }: EnrollPhoneInput): Promise<void> => {
     await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
 
@@ -309,7 +304,6 @@ export class AuthService {
       if (!machine) throw new NotFoundException();
 
       machine.enrollPhoneNumber = phoneNumber;
-      machine.snapshot = parent?.getPersistedSnapshot() as object;
       await machineRepository.save(machine);
     });
   };
@@ -344,10 +338,10 @@ export class AuthService {
     return { sessionToken: machine!.stytch_session! };
   }
 
-  public processSMSOtpActor = async (
-    { sessionId, code }: ProcessSMSOtpInput,
-    parent?: AnyActorRef,
-  ): Promise<void> => {
+  public processSMSOtpActor = async ({
+    sessionId,
+    code,
+  }: ProcessSMSOtpInput): Promise<void> => {
     await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
 
@@ -368,35 +362,26 @@ export class AuthService {
       });
 
       machine.stytch_session = result.session_token;
-      machine.snapshot = parent?.getPersistedSnapshot() as object;
       await machineRepository.save(machine);
     });
   };
 
   public async createStateMachine(sessionId: string, email: string) {
     const machine = createAuthMachine({
-      sendMagicLink: (input, parent) => this.sendMagicLinkActor(input, parent),
-      processMagicLink: (input, parent) =>
-        this.processMagicLinkActor(input, parent),
-      sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
-      enrollPhone: (input, parent) => this.enrollPhoneActor(input, parent),
-      processSMSOtp: (input, parent) => this.processSMSOtpActor(input, parent),
+      sendMagicLink: (input) => this.sendMagicLinkActor(input),
+      processMagicLink: (input) => this.processMagicLinkActor(input),
+      sendOTPSMS: (input) => this.sendOTPSMSActor(input),
+      enrollPhone: (input) => this.enrollPhoneActor(input),
+      processSMSOtp: (input) => this.processSMSOtpActor(input),
     });
 
     const actor = createActor(machine, {
       input: { sessionId, email },
     });
 
+    this.subscribeToActor(sessionId, actor);
     actor.start();
     this.sessions.set(sessionId, actor);
-
-    const fsmRepository = this.datasource.getRepository(FSM);
-    const fsm = fsmRepository.create({
-      sessionId,
-      snapshot: actor.getPersistedSnapshot() as object,
-    });
-
-    await fsmRepository.save(fsm);
   }
 
   public async restoreSessions(): Promise<void> {
@@ -415,14 +400,11 @@ export class AuthService {
       const context = (snapshot as any).context as AuthMachineContext;
 
       const machine = createAuthMachine({
-        sendMagicLink: (input, parent) =>
-          this.sendMagicLinkActor(input, parent),
-        processMagicLink: (input, parent) =>
-          this.processMagicLinkActor(input, parent),
-        sendOTPSMS: (input, parent) => this.sendOTPSMSActor(input, parent),
-        enrollPhone: (input, parent) => this.enrollPhoneActor(input, parent),
-        processSMSOtp: (input, parent) =>
-          this.processSMSOtpActor(input, parent),
+        sendMagicLink: (input) => this.sendMagicLinkActor(input),
+        processMagicLink: (input) => this.processMagicLinkActor(input),
+        sendOTPSMS: (input) => this.sendOTPSMSActor(input),
+        enrollPhone: (input) => this.enrollPhoneActor(input),
+        processSMSOtp: (input) => this.processSMSOtpActor(input),
       });
 
       const actor = createActor(machine, {
@@ -430,6 +412,7 @@ export class AuthService {
         snapshot,
       });
 
+      this.subscribeToActor(record.sessionId, actor);
       actor.start();
       this.sessions.set(record.sessionId, actor);
     }
