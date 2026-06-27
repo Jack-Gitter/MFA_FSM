@@ -222,6 +222,41 @@ export class AuthService {
     });
   };
 
+  public async enrollPhone({
+    sessionId,
+    phoneNumber,
+  }: {
+    sessionId: string;
+    phoneNumber: string;
+  }): Promise<void> {
+    const actor = this.sessions.get(sessionId);
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    actor.send({ type: 'received_phone_number', phoneNumber });
+  }
+
+  public enrollPhoneActor = async ({
+    sessionId,
+    phoneNumber,
+  }: EnrollPhoneInput): Promise<void> => {
+    await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      machine.enrollPhoneNumber = phoneNumber;
+      await machineRepository.save(machine);
+    });
+  };
+
   public sendOTPSMSActor = async ({
     sessionId,
     email,
@@ -270,41 +305,6 @@ export class AuthService {
 
         await outboxRepository.save(outboxMessage);
       }
-    });
-  };
-
-  public async enrollPhone({
-    sessionId,
-    phoneNumber,
-  }: {
-    sessionId: string;
-    phoneNumber: string;
-  }): Promise<void> {
-    const actor = this.sessions.get(sessionId);
-
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
-
-    actor.send({ type: 'received_phone_number', phoneNumber });
-  }
-
-  public enrollPhoneActor = async ({
-    sessionId,
-    phoneNumber,
-  }: EnrollPhoneInput): Promise<void> => {
-    await this.datasource.transaction(async (manager) => {
-      const machineRepository = manager.getRepository(FSM);
-
-      const machine = await machineRepository.findOne({
-        where: { sessionId },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!machine) throw new NotFoundException();
-
-      machine.enrollPhoneNumber = phoneNumber;
-      await machineRepository.save(machine);
     });
   };
 
