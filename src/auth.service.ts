@@ -136,66 +136,70 @@ export class AuthService {
     { sessionId, token }: ProcessMagicLinkInput,
     parent?: AnyActorRef,
   ): Promise<void> => {
-    const machineRepository = this.datasource.getRepository(FSM);
+    return await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
 
-    const machine = await machineRepository.findOne({
-      where: { sessionId },
-      lock: { mode: 'pessimistic_write' },
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      if (!machine.processedMagicLink) {
+        await this.stytch.magicLinks.authenticate({ token });
+      }
+
+      machine.snapshot = parent?.getPersistedSnapshot() as object;
+      machine.processedMagicLink = true;
+
+      await machineRepository.save(machine);
     });
-
-    if (!machine) throw new NotFoundException();
-
-    if (!machine.processedMagicLink) {
-      await this.stytch.magicLinks.authenticate({ token });
-    }
-
-    machine.snapshot = parent?.getPersistedSnapshot() as object;
-    machine.processedMagicLink = true;
-
-    await machineRepository.save(machine);
   };
 
   public sendOTPSMSActor = async (
     { sessionId, email }: SendOTPSMSInput,
     parent?: AnyActorRef,
   ): Promise<SendOTPSMSOutput> => {
-    const machineRepository = this.datasource.getRepository(FSM);
+    return await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
 
-    const machine = await machineRepository.findOne({
-      where: { sessionId },
-      lock: { mode: 'pessimistic_write' },
-    });
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-    if (!machine) throw new NotFoundException();
+      if (!machine) throw new NotFoundException();
 
-    const searchResult = await this.stytch.users.search({
-      query: {
-        operator: 'AND',
-        operands: [{ filter_name: 'email_address', filter_value: [email] }],
-      },
-    });
+      const searchResult = await this.stytch.users.search({
+        query: {
+          operator: 'AND',
+          operands: [{ filter_name: 'email_address', filter_value: [email] }],
+        },
+      });
 
-    const user = searchResult.results[0];
+      const user = searchResult.results[0];
 
-    if (!user) {
-      throw new Error(`No Stytch user found for email: ${email}`);
-    }
+      if (!user) {
+        throw new Error(`No Stytch user found for email: ${email}`);
+      }
 
-    const phoneNumber = user.phone_numbers?.[0]?.phone_number;
+      const phoneNumber = user.phone_numbers?.[0]?.phone_number;
 
-    if (!phoneNumber) {
+      if (!phoneNumber) {
+        machine.snapshot = parent?.getPersistedSnapshot() as object;
+        await machineRepository.save(machine);
+
+        return { hasPhone: false };
+      }
+
+      await this.stytch.otps.sms.send({ phone_number: phoneNumber });
+
       machine.snapshot = parent?.getPersistedSnapshot() as object;
       await machineRepository.save(machine);
 
-      return { hasPhone: false };
-    }
-
-    await this.stytch.otps.sms.send({ phone_number: phoneNumber });
-
-    machine.snapshot = parent?.getPersistedSnapshot() as object;
-    await machineRepository.save(machine);
-
-    return { hasPhone: true };
+      return { hasPhone: true };
+    });
   };
 
   public enrollPhoneActor = async (
