@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { Actor, AnyActorRef, createActor, Snapshot } from 'xstate';
+import { Actor, createActor, Snapshot } from 'xstate';
 import {
   AuthMachineContext,
   createAuthMachine,
@@ -104,12 +104,19 @@ export class AuthService {
           entry.status = OutboxStatus.SENT;
           console.log('sent sms otp!');
 
-          await this.datasource
-            .getRepository(FSM)
-            .update(
-              { sessionId: entry.sessionId },
-              { phoneId: result.value.phone_id },
-            );
+          await this.datasource.transaction(async (manager) => {
+            const fsmRepository = manager.getRepository(FSM);
+
+            const machine = await fsmRepository.findOne({
+              where: { sessionId: entry.sessionId },
+              lock: { mode: 'pessimistic_write' },
+            });
+
+            if (!machine) throw new NotFoundException();
+
+            machine.phoneId = result.value.phone_id;
+            await fsmRepository.save(machine);
+          });
         } else {
           console.error(
             `Failed to send OTP SMS to ${entry.phoneNumber}:`,
@@ -180,13 +187,17 @@ export class AuthService {
 
     await new Promise<void>((resolve, reject) => {
       const sub = actor.subscribe((snapshot) => {
-        if (!snapshot.matches('processing_magic_link')) {
+        if (snapshot.matches({ processing_sms_otp: 'waiting' })) {
           sub.unsubscribe();
-          if (snapshot.matches('error')) {
-            reject(new Error('Magic link processing failed'));
-          } else {
-            resolve();
-          }
+          resolve();
+        } else if (
+          snapshot.matches({ processing_phone_enrollment: 'waiting' })
+        ) {
+          sub.unsubscribe();
+          resolve();
+        } else if (snapshot.matches('error')) {
+          sub.unsubscribe();
+          reject(new Error('Magic link processing failed'));
         }
       });
 
@@ -208,21 +219,21 @@ export class AuthService {
 
       if (!machine) throw new NotFoundException();
 
-      let hasPhone = false;
-
       if (!machine.processedMagicLink) {
         const result = await this.stytch.magicLinks.authenticate({
           token,
           session_duration_minutes: 10,
         });
 
-        hasPhone = result.user.phone_numbers.length > 0;
+        machine.stytchUser = result.user;
         machine.intermediarySessionToken = result.session_token;
         machine.processedMagicLink = true;
         await machineRepository.save(machine);
       }
 
-      return { hasPhone };
+      return {
+        hasPhone: (machine.stytchUser?.phone_numbers?.length ?? 0) > 0,
+      };
     });
   };
 
@@ -263,7 +274,6 @@ export class AuthService {
 
   public sendOTPSMSActor = async ({
     sessionId,
-    email,
   }: SendOTPSMSInput): Promise<void> => {
     await this.datasource.transaction(async (manager) => {
       const machineRepository = manager.getRepository(FSM);
@@ -276,23 +286,12 @@ export class AuthService {
 
       if (!machine) throw new NotFoundException();
 
-      let phoneNumber = machine.enrollPhoneNumber;
+      const phoneNumber =
+        machine.enrollPhoneNumber ??
+        machine.stytchUser?.phone_numbers?.[0]?.phone_number;
 
-      if (!phoneNumber) {
-        const searchResult = await this.stytch.users.search({
-          query: {
-            operator: 'AND',
-            operands: [{ filter_name: 'email_address', filter_value: [email] }],
-          },
-        });
-
-        const user = searchResult.results[0];
-        if (!user) throw new Error(`No Stytch user found for email: ${email}`);
-
-        phoneNumber = user.phone_numbers?.[0]?.phone_number;
-        if (!phoneNumber)
-          throw new Error(`No phone number found for email: ${email}`);
-      }
+      if (!phoneNumber)
+        throw new Error(`No phone number found for sessionId: ${sessionId}`);
 
       const existing = await outboxRepository.findOne({
         where: { sessionId },
@@ -335,11 +334,20 @@ export class AuthService {
       actor.send({ type: 'received_otp', code });
     });
 
-    const machine = await this.datasource
-      .getRepository(FSM)
-      .findOne({ where: { sessionId } });
+    const sessionToken = await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
 
-    return { sessionToken: machine!.sessionToken! };
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      return machine.sessionToken;
+    });
+
+    return { sessionToken: sessionToken! };
   }
 
   public processSMSOtpActor = async ({

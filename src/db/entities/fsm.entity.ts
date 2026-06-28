@@ -5,6 +5,7 @@ import {
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import * as stytch from 'stytch';
 
 @Entity('machines')
 export class FSM {
@@ -34,8 +35,8 @@ export class FSM {
   })
   intermediarySessionToken: string | null;
 
-  @Column({ name: 'phone_id', type: 'varchar', nullable: true, default: null })
-  phoneId: string | null;
+  @Column({ name: 'stytch_user', type: 'jsonb', nullable: true, default: null })
+  stytchUser: stytch.User | null;
 
   @Column({
     name: 'session_token',
@@ -44,4 +45,7 @@ export class FSM {
     default: null,
   })
   sessionToken: string | null;
+
+  @Column({ name: 'phone_id', type: 'varchar', nullable: true, default: null })
+  phoneId: string | null;
 }
