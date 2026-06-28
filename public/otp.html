@@ -17,12 +17,9 @@
           body: JSON.stringify({ code }),
         });
 
-        if (!res.ok) {
-          throw new Error('Failed to verify OTP');
-        }
+        if (!res.ok) throw new Error('Failed to verify OTP');
 
-        const data = await res.json();
-        document.body.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+        window.location.href = '/auth/verify';
       } catch (err) {
         document.getElementById('error').textContent = err.message;
       }

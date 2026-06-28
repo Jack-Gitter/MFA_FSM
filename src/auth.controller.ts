@@ -7,13 +7,18 @@ import {
   SubmitOtpDto,
 } from './dto/dto';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Response, Request } from 'express';
+import { Response } from 'express';
 import { join } from 'path';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Get()
+  async authPage(@Res() res: Response): Promise<void> {
+    res.sendFile(join(process.cwd(), 'public', 'email-input.html'));
+  }
 
   @Post('magic-link')
   @ApiOperation({ summary: 'Send a magic link to the provided email' })
@@ -23,33 +28,56 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<SendMagicLinkResponse> {
     const result = await this.authService.sendMagicLink(dto.email);
-
     res.cookie('sessionId', result.sessionId, {
       httpOnly: true,
-      secure: true,
+      secure: false,
       sameSite: 'lax',
     });
-
     return result;
   }
 
-  @Get()
+  @Get('magic-link')
   async authenticate(
     @Query('token') token: string,
     @Req() req: any,
     @Res() res: Response,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
-    const { hasPhone } = await this.authService.handleMagicLink({
-      sessionId,
-      token,
-    });
+    await this.authService.handleMagicLink({ sessionId, token });
+    res.redirect('/auth/verify');
+  }
 
-    if (hasPhone) {
-      res.redirect('/auth/otp');
-    } else {
-      res.redirect('/auth/enroll-phone');
+  @Get('verify')
+  async verifyPage(@Req() req: any, @Res() res: Response): Promise<void> {
+    const sessionId = req.cookies['sessionId'];
+
+    if (!sessionId) {
+      return res.redirect('/auth');
     }
+
+    const state = this.authService.getSessionState(sessionId);
+
+    if (!state) {
+      return res.redirect('/auth');
+    }
+
+    if (state.matches('processing_phone_enrollment')) {
+      return res.sendFile(join(process.cwd(), 'public', 'enroll-phone.html'));
+    }
+
+    if (state.matches('processing_sms_otp')) {
+      return res.sendFile(join(process.cwd(), 'public', 'otp.html'));
+    }
+
+    if (state.matches('error')) {
+      return res.sendFile(join(process.cwd(), 'public', 'error.html'));
+    }
+
+    if (state.matches('complete')) {
+      return res.sendFile(join(process.cwd(), 'public', 'complete.html'));
+    }
+
+    res.redirect('/auth');
   }
 
   @Post('enroll-phone')
@@ -77,19 +105,9 @@ export class AuthController {
     });
     res.cookie('stytchSession', sessionToken, {
       httpOnly: true,
-      secure: true,
+      secure: false,
       sameSite: 'lax',
     });
     return { sessionToken };
-  }
-
-  @Get('otp')
-  async otpPage(@Res() res: Response): Promise<void> {
-    res.sendFile(join(process.cwd(), 'public', 'otp.html'));
-  }
-
-  @Get('enroll-phone')
-  async enrollPhonePage(@Res() res: Response): Promise<void> {
-    res.sendFile(join(process.cwd(), 'public', 'enroll-phone.html'));
   }
 }

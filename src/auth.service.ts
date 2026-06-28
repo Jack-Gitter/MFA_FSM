@@ -30,11 +30,17 @@ export class AuthService {
     @Inject(STYTCH_CLIENT) private readonly stytch: stytch.Client,
   ) {}
 
+  private readonly sessions = new Map<string, Actor<AuthActor>>();
+
   async onModuleInit() {
     await this.restoreSessions();
   }
 
-  private readonly sessions = new Map<string, Actor<AuthActor>>();
+  public getSessionState(sessionId: string) {
+    const actor = this.sessions.get(sessionId);
+    if (!actor) return null;
+    return actor.getSnapshot();
+  }
 
   @Cron(CronExpression.EVERY_5_SECONDS)
   public async pollOutbox(): Promise<void> {
@@ -165,29 +171,31 @@ export class AuthService {
   }: {
     sessionId: string;
     token: string;
-  }): Promise<{ hasPhone: boolean }> {
+  }): Promise<void> {
     const actor = this.sessions.get(sessionId);
 
     if (!actor) {
       throw new Error(`No session found for sessionId: ${sessionId}`);
     }
 
-    actor.send({ type: 'received_magic_link', token });
+    await new Promise<void>((resolve, reject) => {
+      const sub = actor.subscribe((snapshot) => {
+        if (snapshot.matches({ processing_sms_otp: 'waiting' })) {
+          sub.unsubscribe();
+          resolve();
+        } else if (
+          snapshot.matches({ processing_phone_enrollment: 'waiting' })
+        ) {
+          sub.unsubscribe();
+          resolve();
+        } else if (snapshot.matches('error')) {
+          sub.unsubscribe();
+          reject(new Error('Magic link processing failed'));
+        }
+      });
 
-    const snapshot = actor.getSnapshot();
-    const email = snapshot.context.email;
-
-    const searchResult = await this.stytch.users.search({
-      query: {
-        operator: 'AND',
-        operands: [{ filter_name: 'email_address', filter_value: [email] }],
-      },
+      actor.send({ type: 'received_magic_link', token });
     });
-
-    const user = searchResult.results[0];
-    if (!user) throw new Error(`No Stytch user found for email: ${email}`);
-
-    return { hasPhone: user.phone_numbers.length > 0 };
   }
 
   public processMagicLinkActor = async ({

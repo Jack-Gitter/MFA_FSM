@@ -17,11 +17,9 @@
           body: JSON.stringify({ phoneNumber }),
         });
 
-        if (!res.ok) {
-          throw new Error('Failed to enroll phone');
-        }
+        if (!res.ok) throw new Error('Failed to enroll phone');
 
-        window.location.href = '/auth/otp';
+        window.location.href = '/auth/verify';
       } catch (err) {
         document.getElementById('error').textContent = err.message;
       }
