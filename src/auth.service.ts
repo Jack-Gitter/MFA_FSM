@@ -217,7 +217,7 @@ export class AuthService {
         });
 
         hasPhone = result.user.phone_numbers.length > 0;
-        machine.sessionToken = result.session_token;
+        machine.intermediarySessionToken = result.session_token;
         machine.processedMagicLink = true;
         await machineRepository.save(machine);
       }
@@ -303,7 +303,7 @@ export class AuthService {
         const outboxMessage = outboxRepository.create({
           phoneNumber,
           sessionId,
-          sessionToken: machine.sessionToken!,
+          sessionToken: machine.intermediarySessionToken!,
           status: OutboxStatus.PENDING,
         });
 
@@ -339,7 +339,7 @@ export class AuthService {
       .getRepository(FSM)
       .findOne({ where: { sessionId } });
 
-    return { sessionToken: machine!.stytch_session! };
+    return { sessionToken: machine!.sessionToken! };
   }
 
   public processSMSOtpActor = async ({
@@ -361,11 +361,11 @@ export class AuthService {
       const result = await this.stytch.otps.authenticate({
         method_id: machine.phoneId,
         code,
-        session_token: machine.sessionToken ?? undefined,
+        session_token: machine.intermediarySessionToken ?? undefined,
         session_duration_minutes: 60,
       });
 
-      machine.stytch_session = result.session_token;
+      machine.sessionToken = result.session_token;
       await machineRepository.save(machine);
     });
   };

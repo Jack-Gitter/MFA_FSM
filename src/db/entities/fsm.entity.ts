@@ -27,21 +27,21 @@ export class FSM {
   enrollPhoneNumber: string | null;
 
   @Column({
+    name: 'intermediary_session_token',
+    type: 'varchar',
+    nullable: true,
+    default: null,
+  })
+  intermediarySessionToken: string | null;
+
+  @Column({ name: 'phone_id', type: 'varchar', nullable: true, default: null })
+  phoneId: string | null;
+
+  @Column({
     name: 'session_token',
     type: 'varchar',
     nullable: true,
     default: null,
   })
   sessionToken: string | null;
-
-  @Column({ name: 'phone_id', type: 'varchar', nullable: true, default: null })
-  phoneId: string | null;
-
-  @Column({
-    name: 'stytch_session',
-    type: 'varchar',
-    nullable: true,
-    default: null,
-  })
-  stytch_session: string | null;
 }
