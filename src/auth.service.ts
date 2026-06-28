@@ -180,17 +180,13 @@ export class AuthService {
 
     await new Promise<void>((resolve, reject) => {
       const sub = actor.subscribe((snapshot) => {
-        if (snapshot.matches({ processing_sms_otp: 'waiting' })) {
+        if (!snapshot.matches('processing_magic_link')) {
           sub.unsubscribe();
-          resolve();
-        } else if (
-          snapshot.matches({ processing_phone_enrollment: 'waiting' })
-        ) {
-          sub.unsubscribe();
-          resolve();
-        } else if (snapshot.matches('error')) {
-          sub.unsubscribe();
-          reject(new Error('Magic link processing failed'));
+          if (snapshot.matches('error')) {
+            reject(new Error('Magic link processing failed'));
+          } else {
+            resolve();
+          }
         }
       });
 
