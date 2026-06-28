@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Actor, createActor, Snapshot } from 'xstate';
 import {
@@ -185,6 +190,11 @@ export class AuthService {
       throw new Error(`No session found for sessionId: ${sessionId}`);
     }
 
+    this.sendChecked(actor, {
+      type: 'received_magic_link',
+      token,
+    });
+
     await new Promise<void>((resolve, reject) => {
       const sub = actor.subscribe((snapshot) => {
         if (snapshot.matches({ processing_sms_otp: 'waiting' })) {
@@ -249,6 +259,11 @@ export class AuthService {
     if (!actor) {
       throw new Error(`No session found for sessionId: ${sessionId}`);
     }
+
+    this.sendChecked(actor, {
+      type: 'received_phone_number',
+      phoneNumber,
+    });
 
     await new Promise<void>((resolve, reject) => {
       const sub = actor.subscribe((snapshot) => {
@@ -332,6 +347,11 @@ export class AuthService {
   }): Promise<{ sessionToken: string }> {
     const actor = this.sessions.get(sessionId);
     if (!actor) throw new Error(`No session found for sessionId: ${sessionId}`);
+
+    this.sendChecked(actor, {
+      type: 'received_otp',
+      code,
+    });
 
     await new Promise<void>((resolve, reject) => {
       const sub = actor.subscribe((snapshot) => {
@@ -442,5 +462,17 @@ export class AuthService {
     }
 
     console.log(`Restored ${records.length} sessions from database`);
+  }
+
+  private sendChecked(actor: Actor<AuthActor>, event: any): void {
+    const snapshot = actor.getSnapshot();
+
+    if (!snapshot.can(event)) {
+      throw new ConflictException(
+        `Cannot process '${event.type}' from state ${JSON.stringify(snapshot.value)}`,
+      );
+    }
+
+    actor.send(event);
   }
 }
