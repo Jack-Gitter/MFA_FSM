@@ -250,7 +250,19 @@ export class AuthService {
       throw new Error(`No session found for sessionId: ${sessionId}`);
     }
 
-    actor.send({ type: 'received_phone_number', phoneNumber });
+    await new Promise<void>((resolve, reject) => {
+      const sub = actor.subscribe((snapshot) => {
+        if (snapshot.matches({ processing_sms_otp: 'waiting' })) {
+          sub.unsubscribe();
+          resolve();
+        } else if (snapshot.matches('error')) {
+          sub.unsubscribe();
+          reject(new Error('Phone enrollment failed'));
+        }
+      });
+
+      actor.send({ type: 'received_phone_number', phoneNumber });
+    });
   }
 
   public enrollPhoneActor = async ({

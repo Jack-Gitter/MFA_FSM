@@ -11,15 +11,17 @@
     async function submit() {
       const phoneNumber = document.getElementById('phoneNumber').value;
       try {
-        const res = await fetch('/auth/enroll-phone', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phoneNumber }),
-        });
+		const res = await fetch('/auth/enroll-phone', {
+		  method: 'POST',
+		  headers: { 'Content-Type': 'application/json' },
+		  body: JSON.stringify({ phoneNumber }),
+		});
 
-        if (!res.ok) throw new Error('Failed to enroll phone');
+		if (!res.ok) {
+		  throw new Error('Failed to enroll phone');
+		}
 
-        window.location.href = '/auth/verify';
+		window.location.href = '/auth/verify';
       } catch (err) {
         document.getElementById('error').textContent = err.message;
       }
