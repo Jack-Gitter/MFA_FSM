@@ -50,57 +50,42 @@ export class AuthService {
     sessionId: string,
     token: string,
   ): Promise<void> {
-    const current = await this.datasource
-      .getRepository(FSM)
-      .findOne({ where: { sessionId } });
-    if (!current) throw new NotFoundException(`No session found: ${sessionId}`);
-
-    const gate = authMachine.resolveState({
-      value: current.state,
-      context: {},
-    });
-    if (!gate.can({ type: 'magic_link_verified', hasPhone: true })) {
-      throw new ConflictException(
-        `Cannot verify magic link from state '${current.state}'`,
-      );
-    }
-
-    let stytchUser = current.stytchUser;
-    let intermediarySessionToken = current.intermediarySessionToken;
-    if (!current.processedMagicLink) {
-      const result = await this.stytch.magicLinks.authenticate({
-        token,
-        session_duration_minutes: 10,
-      });
-      stytchUser = result.user;
-      intermediarySessionToken = result.session_token;
-    }
-    const hasPhone = (stytchUser?.phone_numbers?.length ?? 0) > 0;
-    const event = { type: 'magic_link_verified', hasPhone } as const;
-
     await this.datasource.transaction(async (manager) => {
       const repo = manager.getRepository(FSM);
       const fsm = await repo.findOne({
         where: { sessionId },
         lock: { mode: 'pessimistic_write' },
       });
+
       if (!fsm) throw new NotFoundException(`No session found: ${sessionId}`);
 
       const snapshot = authMachine.resolveState({
         value: fsm.state,
         context: {},
       });
-      if (!snapshot.can(event)) {
+
+      if (!snapshot.can({ type: 'magic_link_verified', hasPhone: true })) {
         throw new ConflictException(
-          `Cannot '${event.type}' from state '${fsm.state}'`,
+          `Cannot verify magic link from state '${fsm.state}'`,
         );
       }
-      const nextState = transition(authMachine, snapshot, event)[0]
-        .value as AuthState;
 
-      fsm.stytchUser = stytchUser;
-      fsm.intermediarySessionToken = intermediarySessionToken;
-      fsm.processedMagicLink = true;
+      if (!fsm.processedMagicLink) {
+        const result = await this.stytch.magicLinks.authenticate({
+          token,
+          session_duration_minutes: 10,
+        });
+        fsm.stytchUser = result.user;
+        fsm.intermediarySessionToken = result.session_token;
+        fsm.processedMagicLink = true;
+      }
+
+      const hasPhone = (fsm.stytchUser?.phone_numbers?.length ?? 0) > 0;
+      const nextState = transition(authMachine, snapshot, {
+        type: 'magic_link_verified',
+        hasPhone,
+      })[0].value as AuthState;
+
       if (nextState === 'awaiting_otp') {
         await this.enqueueSms(manager, fsm);
       }
@@ -114,40 +99,27 @@ export class AuthService {
     sessionId: string,
     phoneNumber: string,
   ): Promise<void> {
-    const current = await this.datasource
-      .getRepository(FSM)
-      .findOne({ where: { sessionId } });
-    if (!current) throw new NotFoundException(`No session found: ${sessionId}`);
-
-    const gate = authMachine.resolveState({
-      value: current.state,
-      context: {},
-    });
-    if (!gate.can({ type: 'phone_enrolled', phoneNumber })) {
-      throw new ConflictException(
-        `Cannot enroll phone from state '${current.state}'`,
-      );
-    }
-
-    const event = { type: 'phone_enrolled', phoneNumber } as const;
-
     await this.datasource.transaction(async (manager) => {
       const repo = manager.getRepository(FSM);
       const fsm = await repo.findOne({
         where: { sessionId },
         lock: { mode: 'pessimistic_write' },
       });
+
       if (!fsm) throw new NotFoundException(`No session found: ${sessionId}`);
 
+      const event = { type: 'phone_enrolled', phoneNumber } as const;
       const snapshot = authMachine.resolveState({
         value: fsm.state,
         context: {},
       });
+
       if (!snapshot.can(event)) {
         throw new ConflictException(
           `Cannot '${event.type}' from state '${fsm.state}'`,
         );
       }
+
       const nextState = transition(authMachine, snapshot, event)[0]
         .value as AuthState;
 
@@ -160,57 +132,41 @@ export class AuthService {
   }
 
   public async submitOtp(sessionId: string, code: string): Promise<void> {
-    const current = await this.datasource
-      .getRepository(FSM)
-      .findOne({ where: { sessionId } });
-    if (!current) throw new NotFoundException(`No session found: ${sessionId}`);
-
-    const gate = authMachine.resolveState({
-      value: current.state,
-      context: {},
-    });
-    if (!gate.can({ type: 'otp_verified' })) {
-      throw new ConflictException(
-        `Cannot verify OTP from state '${current.state}'`,
-      );
-    }
-
-    let sessionToken = current.sessionToken;
-    if (!sessionToken) {
-      if (!current.phoneId)
-        throw new BadRequestException('OTP has not been sent yet');
-      const result = await this.stytch.otps.authenticate({
-        method_id: current.phoneId,
-        code,
-        session_token: current.intermediarySessionToken ?? undefined,
-        session_duration_minutes: 60,
-      });
-      sessionToken = result.session_token;
-    }
-
-    const event = { type: 'otp_verified' } as const;
-
     await this.datasource.transaction(async (manager) => {
       const repo = manager.getRepository(FSM);
       const fsm = await repo.findOne({
         where: { sessionId },
         lock: { mode: 'pessimistic_write' },
       });
+
       if (!fsm) throw new NotFoundException(`No session found: ${sessionId}`);
 
+      const event = { type: 'otp_verified' } as const;
       const snapshot = authMachine.resolveState({
         value: fsm.state,
         context: {},
       });
+
       if (!snapshot.can(event)) {
         throw new ConflictException(
-          `Cannot '${event.type}' from state '${fsm.state}'`,
+          `Cannot verify OTP from state '${fsm.state}'`,
         );
       }
+
+      if (!fsm.sessionToken) {
+        if (!fsm.phoneId)
+          throw new BadRequestException('OTP has not been sent yet');
+        const result = await this.stytch.otps.authenticate({
+          method_id: fsm.phoneId,
+          code,
+          session_token: fsm.intermediarySessionToken ?? undefined,
+          session_duration_minutes: 60,
+        });
+        fsm.sessionToken = result.session_token;
+      }
+
       const nextState = transition(authMachine, snapshot, event)[0]
         .value as AuthState;
-
-      fsm.sessionToken = sessionToken;
 
       fsm.state = nextState;
       await repo.save(fsm);
@@ -220,10 +176,12 @@ export class AuthService {
   private async enqueueSms(manager: EntityManager, fsm: FSM): Promise<void> {
     const phoneNumber =
       fsm.enrollPhoneNumber ?? fsm.stytchUser?.phone_numbers?.[0]?.phone_number;
+
     if (!phoneNumber)
       throw new BadRequestException(
         `No phone number on file for ${fsm.sessionId}`,
       );
+
     if (!fsm.intermediarySessionToken)
       throw new BadRequestException(
         `Session ${fsm.sessionId} not authenticated`,
@@ -233,6 +191,7 @@ export class AuthService {
     const existing = await repo.findOne({
       where: { sessionId: fsm.sessionId },
     });
+
     if (existing) return;
 
     await repo.save(
