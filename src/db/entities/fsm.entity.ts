@@ -12,8 +12,6 @@ export class FSM {
   @PrimaryColumn({ name: 'session_id' })
   sessionId: string;
 
-  // The single source of truth for this session's state. Just a string —
-  // rehydrated into the machine on each request and written back here.
   @Column({ type: 'varchar' })
   state: string;
 

@@ -96,7 +96,6 @@ export class AuthController {
       case 'error':
         return res.sendFile(join(process.cwd(), 'public', 'error.html'));
       default:
-        // awaiting_magic_link — transient, poll until it advances.
         return res.sendFile(join(process.cwd(), 'public', 'waiting.html'));
     }
   }

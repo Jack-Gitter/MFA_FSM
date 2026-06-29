@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { transition } from 'xstate';
-import { authMachine, AuthEvent, AuthState } from './auth.machine';
+import { authMachine, AuthState } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
 import { FSM } from './db/entities/fsm.entity';
@@ -25,64 +25,6 @@ export class AuthService {
     @Inject(STYTCH_CLIENT) private readonly stytch: stytch.Client,
   ) {}
 
-  // ---------------------------------------------------------------------------
-  // The core transition primitive — the stateless equivalent of sm.Run wrapped
-  // in load → run → save → commit. No long-lived machine: we rehydrate the
-  // machine from the row's state, gate with can(), compute the destination with
-  // transition(), run the handler's work, and persist the new state + the
-  // changed data in ONE transaction. Nothing survives the request, so the
-  // in-memory state can never diverge from the database.
-  // ---------------------------------------------------------------------------
-  private async applyTransition(
-    sessionId: string,
-    event: AuthEvent,
-    work?: (
-      manager: EntityManager,
-      row: FSM,
-      nextState: AuthState,
-    ) => Promise<void> | void,
-  ): Promise<FSM> {
-    return this.datasource.transaction(async (manager) => {
-      const repo = manager.getRepository(FSM);
-
-      // load (with row lock so concurrent operations serialize)
-      const row = await repo.findOne({
-        where: { sessionId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!row) throw new NotFoundException(`No session found: ${sessionId}`);
-
-      // rehydrate the machine at the persisted state and gate the event
-      const snapshot = authMachine.resolveState({
-        value: row.state,
-        context: {},
-      });
-      if (!snapshot.can(event)) {
-        throw new ConflictException(
-          `Cannot '${event.type}' from state '${row.state}'`,
-        );
-      }
-
-      // ask the machine for the destination (pure transition, no running actor)
-      const [nextSnapshot] = transition(authMachine, snapshot, event);
-      const nextState = nextSnapshot.value as AuthState;
-
-      // the handler's work (the "PostTransition") — mutates row / writes
-      // related rows through the same transaction
-      await work?.(manager, row, nextState);
-
-      // persist the new state alongside the work, atomically
-      row.state = nextState;
-      await repo.save(row);
-      return row;
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // HTTP handlers — all the logic lives here.
-  // ---------------------------------------------------------------------------
-
-  // Create a session and enqueue the magic-link email (one transaction).
   public async createSession(email: string): Promise<{ sessionId: string }> {
     const sessionId = crypto.randomUUID();
 
@@ -95,13 +37,10 @@ export class AuthService {
         }),
       );
 
-      await manager
-        .getRepository(MagicLinkOutbox)
-        .createQueryBuilder()
-        .insert()
-        .values({ email, sessionId, status: OutboxStatus.PENDING })
-        .orIgnore()
-        .execute();
+      const outboxRepo = manager.getRepository(MagicLinkOutbox);
+      await outboxRepo.save(
+        outboxRepo.create({ email, sessionId, status: OutboxStatus.PENDING }),
+      );
     });
 
     return { sessionId };
@@ -111,25 +50,24 @@ export class AuthService {
     sessionId: string,
     token: string,
   ): Promise<void> {
-    const row = await this.datasource
+    const current = await this.datasource
       .getRepository(FSM)
       .findOne({ where: { sessionId } });
-    if (!row) throw new NotFoundException(`No session found: ${sessionId}`);
+    if (!current) throw new NotFoundException(`No session found: ${sessionId}`);
 
-    // Gate before the external call so we don't authenticate in the wrong
-    // state. (The hasPhone value is irrelevant to whether the event is legal.)
-    const gate = authMachine.resolveState({ value: row.state, context: {} });
+    const gate = authMachine.resolveState({
+      value: current.state,
+      context: {},
+    });
     if (!gate.can({ type: 'magic_link_verified', hasPhone: true })) {
       throw new ConflictException(
-        `Cannot verify magic link from state '${row.state}'`,
+        `Cannot verify magic link from state '${current.state}'`,
       );
     }
 
-    // External, non-idempotent call — OUTSIDE the transaction. Guarded so a
-    // retry does not re-consume the single-use token.
-    let stytchUser = row.stytchUser;
-    let intermediarySessionToken = row.intermediarySessionToken;
-    if (!row.processedMagicLink) {
+    let stytchUser = current.stytchUser;
+    let intermediarySessionToken = current.intermediarySessionToken;
+    if (!current.processedMagicLink) {
       const result = await this.stytch.magicLinks.authenticate({
         token,
         session_duration_minutes: 10,
@@ -138,110 +76,184 @@ export class AuthService {
       intermediarySessionToken = result.session_token;
     }
     const hasPhone = (stytchUser?.phone_numbers?.length ?? 0) > 0;
+    const event = { type: 'magic_link_verified', hasPhone } as const;
 
-    await this.applyTransition(
-      sessionId,
-      { type: 'magic_link_verified', hasPhone },
-      async (manager, r, nextState) => {
-        r.stytchUser = stytchUser;
-        r.intermediarySessionToken = intermediarySessionToken;
-        r.processedMagicLink = true;
-        // If we're going straight to OTP, enqueue the SMS in the same txn.
-        if (nextState === 'awaiting_otp') {
-          await this.enqueueSms(manager, r);
-        }
-      },
-    );
+    await this.datasource.transaction(async (manager) => {
+      const repo = manager.getRepository(FSM);
+      const fsm = await repo.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!fsm) throw new NotFoundException(`No session found: ${sessionId}`);
+
+      const snapshot = authMachine.resolveState({
+        value: fsm.state,
+        context: {},
+      });
+      if (!snapshot.can(event)) {
+        throw new ConflictException(
+          `Cannot '${event.type}' from state '${fsm.state}'`,
+        );
+      }
+      const nextState = transition(authMachine, snapshot, event)[0]
+        .value as AuthState;
+
+      fsm.stytchUser = stytchUser;
+      fsm.intermediarySessionToken = intermediarySessionToken;
+      fsm.processedMagicLink = true;
+      if (nextState === 'awaiting_otp') {
+        await this.enqueueSms(manager, fsm);
+      }
+
+      fsm.state = nextState;
+      await repo.save(fsm);
+    });
   }
 
   public async enrollPhone(
     sessionId: string,
     phoneNumber: string,
   ): Promise<void> {
-    await this.applyTransition(
-      sessionId,
-      { type: 'phone_enrolled', phoneNumber },
-      async (manager, row) => {
-        row.enrollPhoneNumber = phoneNumber;
-        await this.enqueueSms(manager, row);
-      },
-    );
-  }
-
-  public async submitOtp(sessionId: string, code: string): Promise<void> {
-    const row = await this.datasource
+    const current = await this.datasource
       .getRepository(FSM)
       .findOne({ where: { sessionId } });
-    if (!row) throw new NotFoundException(`No session found: ${sessionId}`);
+    if (!current) throw new NotFoundException(`No session found: ${sessionId}`);
 
-    const gate = authMachine.resolveState({ value: row.state, context: {} });
-    if (!gate.can({ type: 'otp_verified' })) {
+    const gate = authMachine.resolveState({
+      value: current.state,
+      context: {},
+    });
+    if (!gate.can({ type: 'phone_enrolled', phoneNumber })) {
       throw new ConflictException(
-        `Cannot verify OTP from state '${row.state}'`,
+        `Cannot enroll phone from state '${current.state}'`,
       );
     }
 
-    // External, non-idempotent call — OUTSIDE the transaction, idempotency-guarded.
-    let sessionToken = row.sessionToken;
+    const event = { type: 'phone_enrolled', phoneNumber } as const;
+
+    await this.datasource.transaction(async (manager) => {
+      const repo = manager.getRepository(FSM);
+      const fsm = await repo.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!fsm) throw new NotFoundException(`No session found: ${sessionId}`);
+
+      const snapshot = authMachine.resolveState({
+        value: fsm.state,
+        context: {},
+      });
+      if (!snapshot.can(event)) {
+        throw new ConflictException(
+          `Cannot '${event.type}' from state '${fsm.state}'`,
+        );
+      }
+      const nextState = transition(authMachine, snapshot, event)[0]
+        .value as AuthState;
+
+      fsm.enrollPhoneNumber = phoneNumber;
+      await this.enqueueSms(manager, fsm);
+
+      fsm.state = nextState;
+      await repo.save(fsm);
+    });
+  }
+
+  public async submitOtp(sessionId: string, code: string): Promise<void> {
+    const current = await this.datasource
+      .getRepository(FSM)
+      .findOne({ where: { sessionId } });
+    if (!current) throw new NotFoundException(`No session found: ${sessionId}`);
+
+    const gate = authMachine.resolveState({
+      value: current.state,
+      context: {},
+    });
+    if (!gate.can({ type: 'otp_verified' })) {
+      throw new ConflictException(
+        `Cannot verify OTP from state '${current.state}'`,
+      );
+    }
+
+    let sessionToken = current.sessionToken;
     if (!sessionToken) {
-      if (!row.phoneId)
+      if (!current.phoneId)
         throw new BadRequestException('OTP has not been sent yet');
       const result = await this.stytch.otps.authenticate({
-        method_id: row.phoneId,
+        method_id: current.phoneId,
         code,
-        session_token: row.intermediarySessionToken ?? undefined,
+        session_token: current.intermediarySessionToken ?? undefined,
         session_duration_minutes: 60,
       });
       sessionToken = result.session_token;
     }
 
-    await this.applyTransition(sessionId, { type: 'otp_verified' }, (_m, r) => {
-      r.sessionToken = sessionToken;
+    const event = { type: 'otp_verified' } as const;
+
+    await this.datasource.transaction(async (manager) => {
+      const repo = manager.getRepository(FSM);
+      const fsm = await repo.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!fsm) throw new NotFoundException(`No session found: ${sessionId}`);
+
+      const snapshot = authMachine.resolveState({
+        value: fsm.state,
+        context: {},
+      });
+      if (!snapshot.can(event)) {
+        throw new ConflictException(
+          `Cannot '${event.type}' from state '${fsm.state}'`,
+        );
+      }
+      const nextState = transition(authMachine, snapshot, event)[0]
+        .value as AuthState;
+
+      fsm.sessionToken = sessionToken;
+
+      fsm.state = nextState;
+      await repo.save(fsm);
     });
   }
 
-  // Enqueue the OTP SMS as an outbox row (sent later by the cron). No external
-  // call here — it's a pure DB write, committed with the state change.
-  private async enqueueSms(manager: EntityManager, row: FSM): Promise<void> {
+  private async enqueueSms(manager: EntityManager, fsm: FSM): Promise<void> {
     const phoneNumber =
-      row.enrollPhoneNumber ?? row.stytchUser?.phone_numbers?.[0]?.phone_number;
+      fsm.enrollPhoneNumber ?? fsm.stytchUser?.phone_numbers?.[0]?.phone_number;
     if (!phoneNumber)
       throw new BadRequestException(
-        `No phone number on file for ${row.sessionId}`,
+        `No phone number on file for ${fsm.sessionId}`,
       );
-    if (!row.intermediarySessionToken)
+    if (!fsm.intermediarySessionToken)
       throw new BadRequestException(
-        `Session ${row.sessionId} not authenticated`,
+        `Session ${fsm.sessionId} not authenticated`,
       );
 
-    await manager
-      .getRepository(SMSOTPOutbox)
-      .createQueryBuilder()
-      .insert()
-      .values({
-        sessionId: row.sessionId,
+    const repo = manager.getRepository(SMSOTPOutbox);
+    const existing = await repo.findOne({
+      where: { sessionId: fsm.sessionId },
+    });
+    if (existing) return;
+
+    await repo.save(
+      repo.create({
+        sessionId: fsm.sessionId,
         phoneNumber,
-        sessionToken: row.intermediarySessionToken,
+        sessionToken: fsm.intermediarySessionToken,
         status: OutboxStatus.PENDING,
-      })
-      .orIgnore()
-      .execute();
+      }),
+    );
   }
 
   public async getStatus(
     sessionId: string,
   ): Promise<{ state: string; sessionToken: string | null } | null> {
-    const row = await this.datasource
+    const fsm = await this.datasource
       .getRepository(FSM)
       .findOne({ where: { sessionId } });
-    if (!row) return null;
-    return { state: row.state, sessionToken: row.sessionToken };
+    if (!fsm) return null;
+    return { state: fsm.state, sessionToken: fsm.sessionToken };
   }
-
-  // ---------------------------------------------------------------------------
-  // Crons — the transactional-outbox senders. They make the external Stytch
-  // calls and may write the DB directly (they are infrastructure, not actors).
-  // ---------------------------------------------------------------------------
 
   @Cron(CronExpression.EVERY_5_SECONDS)
   public async pollOutbox(): Promise<void> {
@@ -267,7 +279,6 @@ export class AuthService {
         const entry = pending[i];
         if (result.status === 'fulfilled') {
           entry.status = OutboxStatus.SENT;
-          console.log('sent outbox message!');
         } else {
           console.error(
             `Failed to send magic link to ${entry.email}:`,
@@ -303,15 +314,23 @@ export class AuthService {
         const entry = pending[i];
         if (result.status === 'fulfilled') {
           entry.status = OutboxStatus.SENT;
-          console.log('sent sms otp!');
-          // Write the Stytch phone_id straight onto the session row — it's a
-          // field the OTP-verify step needs, not a state transition.
-          await this.datasource
-            .getRepository(FSM)
-            .update(
-              { sessionId: entry.sessionId },
-              { phoneId: result.value.phone_id },
+          try {
+            await this.datasource.transaction(async (manager) => {
+              const repo = manager.getRepository(FSM);
+              const fsm = await repo.findOne({
+                where: { sessionId: entry.sessionId },
+                lock: { mode: 'pessimistic_write' },
+              });
+              if (!fsm) return;
+              fsm.phoneId = result.value.phone_id;
+              await repo.save(fsm);
+            });
+          } catch (err) {
+            console.error(
+              `Failed to persist phone_id for ${entry.sessionId}:`,
+              err,
             );
+          }
         } else {
           console.error(
             `Failed to send OTP SMS to ${entry.phoneNumber}:`,

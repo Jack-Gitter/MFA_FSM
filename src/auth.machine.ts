@@ -1,17 +1,5 @@
 import { setup } from 'xstate';
 
-/**
- * A THIN, stateless state machine. It holds no long-lived runtime state and
- * does no work or persistence. It is used purely as a decision oracle:
- *   - machine.resolveState({ value }) rehydrates a snapshot at a stored state
- *   - snapshot.can(event)            checks whether the event is legal there
- *   - getNextSnapshot(machine, ...)  computes the destination state
- *
- * The actual work and the DB persistence live in the HTTP handlers
- * (auth.service.ts), which commit the new state alongside the changed data
- * in a single transaction. The DB row is the single source of truth.
- */
-
 export type AuthState =
   | 'awaiting_magic_link'
   | 'awaiting_phone'

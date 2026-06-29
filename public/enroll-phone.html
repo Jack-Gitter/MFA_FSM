@@ -23,8 +23,6 @@
 
         if (!res.ok) throw new Error('Failed to enroll phone');
 
-        // Accepted (202). Polling below advances the page once the FSM moves
-        // on to sending the OTP.
         document.getElementById('submitBtn').disabled = true;
         document.getElementById('message').textContent = 'Submitting…';
       } catch (err) {
@@ -43,9 +41,7 @@
         if (state !== CURRENT) {
           window.location.href = '/auth/verify';
         }
-      } catch (err) {
-        // transient network error — keep polling
-      }
+      } catch (err) {}
     }
 
     setInterval(poll, 1500);

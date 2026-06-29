@@ -6,7 +6,6 @@
   <p>We're processing your request. This page will advance automatically.</p>
 
   <script>
-    // States that mean "still working, keep waiting here".
     const TRANSIENT = ['awaiting_magic_link'];
 
     async function poll() {
@@ -20,9 +19,7 @@
         if (!TRANSIENT.includes(state)) {
           window.location.href = '/auth/verify';
         }
-      } catch (err) {
-        // transient network error — keep polling
-      }
+      } catch (err) {}
     }
 
     setInterval(poll, 1500);
