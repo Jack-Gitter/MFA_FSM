@@ -1,8 +1,8 @@
 import {
+  ConflictException,
   Inject,
   Injectable,
   NotFoundException,
-  BadRequestException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Actor, createActor, Snapshot } from 'xstate';
@@ -10,15 +10,11 @@ import {
   AuthMachineContext,
   createAuthMachine,
   EnrollPhoneInput,
-  EnrollPhoneOutput,
   ProcessMagicLinkInput,
   ProcessMagicLinkOutput,
   ProcessSMSOtpInput,
-  ProcessSMSOtpOutput,
   SendMagicLinkInput,
-  SendMagicLinkOutput,
   SendOTPSMSInput,
-  SendOTPSMSOutput,
 } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
@@ -32,8 +28,6 @@ import { SMSOTPOutbox } from './db/entities/sms-outbox.entity';
 
 type AuthActor = ReturnType<typeof createAuthMachine>;
 
-const MAX_FAILURES = 3;
-
 @Injectable()
 export class AuthService {
   constructor(
@@ -42,7 +36,6 @@ export class AuthService {
   ) {}
 
   private readonly sessions = new Map<string, Actor<AuthActor>>();
-  private readonly failureCounts = new Map<string, number>();
 
   async onModuleInit() {
     await this.restoreSessions();
@@ -52,17 +45,6 @@ export class AuthService {
     const actor = this.sessions.get(sessionId);
     if (!actor) return null;
     return actor.getSnapshot();
-  }
-  public async getSessionToken(sessionId: string): Promise<string> {
-    const machine = await this.datasource.getRepository(FSM).findOne({
-      where: { sessionId },
-    });
-
-    if (!machine?.sessionToken) {
-      throw new NotFoundException('Session token not found');
-    }
-
-    return machine.sessionToken;
   }
 
   @Cron(CronExpression.EVERY_5_SECONDS)
@@ -129,11 +111,14 @@ export class AuthService {
 
           await this.datasource.transaction(async (manager) => {
             const fsmRepository = manager.getRepository(FSM);
+
             const machine = await fsmRepository.findOne({
               where: { sessionId: entry.sessionId },
               lock: { mode: 'pessimistic_write' },
             });
+
             if (!machine) throw new NotFoundException();
+
             machine.phoneId = result.value.phone_id;
             await fsmRepository.save(machine);
           });
@@ -149,116 +134,16 @@ export class AuthService {
     );
   }
 
-  private async restoreSession(sessionId: string): Promise<void> {
-    const repo = this.datasource.getRepository(FSM);
-    const record = await repo.findOne({ where: { sessionId } });
-    if (!record) return;
-
-    const snapshot = record.snapshot as Snapshot<unknown>;
-    const context = (snapshot as any).context as AuthMachineContext;
-
-    const machine = createAuthMachine({
-      sendMagicLink: (input) => this.sendMagicLinkActor(input),
-      processMagicLink: (input) => this.processMagicLinkActor(input),
-      sendOTPSMS: (input) => this.sendOTPSMSActor(input),
-      enrollPhone: (input) => this.enrollPhoneActor(input),
-      processSMSOtp: (input) => this.processSMSOtpActor(input),
-    });
-
-    const actor = createActor(machine, {
-      input: { sessionId: context.sessionId, email: context.email },
-      snapshot,
-    });
-
-    this.subscribeToActor(sessionId, actor);
-    actor.start();
-    this.sessions.set(sessionId, actor);
-  }
-
   private subscribeToActor(sessionId: string, actor: Actor<AuthActor>): void {
-    actor.subscribe(async (snapshot) => {
-      const { pendingWrites } = snapshot.context;
-
-      if (
-        !pendingWrites.fsm &&
-        !pendingWrites.magicLinkOutbox &&
-        !pendingWrites.smsOutbox
-      ) {
-        return;
-      }
-
-      try {
-        await this.datasource.transaction(async (manager) => {
-          if (pendingWrites.fsm) {
-            const fsmRepository = manager.getRepository(FSM);
-            const machine = await fsmRepository.findOne({
-              where: { sessionId },
-              lock: { mode: 'pessimistic_write' },
-            });
-
-            if (machine) {
-              Object.assign(machine, pendingWrites.fsm);
-              await fsmRepository.save(machine);
-            } else {
-              const newMachine = fsmRepository.create({
-                sessionId,
-                ...pendingWrites.fsm,
-              });
-              await fsmRepository.save(newMachine);
-            }
-          }
-
-          if (pendingWrites.magicLinkOutbox) {
-            const outboxRepository = manager.getRepository(MagicLinkOutbox);
-            const existing = await outboxRepository.findOne({
-              where: { sessionId },
-              lock: { mode: 'pessimistic_write' },
-            });
-
-            if (!existing) {
-              const outboxMessage = outboxRepository.create(
-                pendingWrites.magicLinkOutbox,
-              );
-              await outboxRepository.save(outboxMessage);
-            }
-          }
-
-          if (pendingWrites.smsOutbox) {
-            const outboxRepository = manager.getRepository(SMSOTPOutbox);
-            const existing = await outboxRepository.findOne({
-              where: { sessionId },
-              lock: { mode: 'pessimistic_write' },
-            });
-
-            if (!existing) {
-              const outboxMessage = outboxRepository.create(
-                pendingWrites.smsOutbox,
-              );
-              await outboxRepository.save(outboxMessage);
-            }
-          }
-        });
-
-        this.failureCounts.delete(sessionId);
-      } catch (err) {
-        console.error(`Failed to persist snapshot for ${sessionId}:`, err);
-
-        const failures = (this.failureCounts.get(sessionId) ?? 0) + 1;
-        this.failureCounts.set(sessionId, failures);
-
-        actor.stop();
-        this.sessions.delete(sessionId);
-
-        if (failures >= MAX_FAILURES) {
-          console.error(
-            `Session ${sessionId} has failed ${failures} times, giving up`,
-          );
-          this.failureCounts.delete(sessionId);
-          return;
-        }
-
-        await this.restoreSession(sessionId);
-      }
+    actor.subscribe((snapshot) => {
+      this.datasource
+        .getRepository(FSM)
+        .upsert({ sessionId, snapshot: snapshot.toJSON() as object }, [
+          'sessionId',
+        ])
+        .catch((err) =>
+          console.error(`Failed to persist snapshot for ${sessionId}:`, err),
+        );
     });
   }
 
@@ -271,47 +156,95 @@ export class AuthService {
   public sendMagicLinkActor = async ({
     sessionId,
     email,
-  }: SendMagicLinkInput): Promise<SendMagicLinkOutput> => {
-    return {
-      magicLinkOutbox: {
-        email,
-        sessionId,
-        status: OutboxStatus.PENDING,
-      },
-    };
+  }: SendMagicLinkInput) => {
+    await this.datasource.transaction(async (manager) => {
+      const outboxRepository = manager.getRepository(MagicLinkOutbox);
+
+      const row = await outboxRepository.findOne({
+        where: { email, sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!row) {
+        const outboxMessage = outboxRepository.create({
+          email,
+          sessionId,
+          status: OutboxStatus.PENDING,
+        });
+
+        await outboxRepository.save(outboxMessage);
+      }
+    });
   };
 
-  public handleMagicLink({
+  public async handleMagicLink({
     sessionId,
     token,
   }: {
     sessionId: string;
     token: string;
-  }): void {
+  }): Promise<void> {
     const actor = this.sessions.get(sessionId);
-    if (!actor) throw new Error(`No session found for sessionId: ${sessionId}`);
-    actor.send({ type: 'received_magic_link', token });
+
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
+    }
+
+    this.sendChecked(actor, {
+      type: 'received_magic_link',
+      token,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const sub = actor.subscribe((snapshot) => {
+        if (snapshot.matches({ processing_sms_otp: 'waiting' })) {
+          sub.unsubscribe();
+          resolve();
+        } else if (
+          snapshot.matches({ processing_phone_enrollment: 'waiting' })
+        ) {
+          sub.unsubscribe();
+          resolve();
+        } else if (snapshot.matches('error')) {
+          sub.unsubscribe();
+          reject(new Error('Magic link processing failed'));
+        }
+      });
+
+      actor.send({ type: 'received_magic_link', token });
+    });
   }
 
   public processMagicLinkActor = async ({
     sessionId,
     token,
   }: ProcessMagicLinkInput): Promise<ProcessMagicLinkOutput> => {
-    const result = await this.stytch.magicLinks.authenticate({
-      token,
-      session_duration_minutes: 10,
+    return await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      if (!machine.processedMagicLink) {
+        const result = await this.stytch.magicLinks.authenticate({
+          token,
+          session_duration_minutes: 10,
+        });
+
+        machine.stytchUser = result.user;
+        machine.intermediarySessionToken = result.session_token;
+        machine.processedMagicLink = true;
+        await machineRepository.save(machine);
+      }
+
+      return {
+        hasPhone: (machine.stytchUser?.phone_numbers?.length ?? 0) > 0,
+      };
     });
-
-    const hasPhone = (result.user.phone_numbers?.length ?? 0) > 0;
-
-    return {
-      hasPhone,
-      fsm: {
-        stytchUser: result.user,
-        intermediarySessionToken: result.session_token,
-        processedMagicLink: true,
-      },
-    };
   };
 
   public async enrollPhone({
@@ -322,50 +255,87 @@ export class AuthService {
     phoneNumber: string;
   }): Promise<void> {
     const actor = this.sessions.get(sessionId);
-    if (!actor) throw new Error(`No session found for sessionId: ${sessionId}`);
 
-    const snapshot = actor.getSnapshot();
-    if (!snapshot.matches({ processing_phone_enrollment: 'waiting' })) {
-      throw new BadRequestException('Not in phone enrollment state');
+    if (!actor) {
+      throw new Error(`No session found for sessionId: ${sessionId}`);
     }
 
-    actor.send({ type: 'received_phone_number', phoneNumber });
+    this.sendChecked(actor, {
+      type: 'received_phone_number',
+      phoneNumber,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const sub = actor.subscribe((snapshot) => {
+        if (snapshot.matches({ processing_sms_otp: 'waiting' })) {
+          sub.unsubscribe();
+          resolve();
+        } else if (snapshot.matches('error')) {
+          sub.unsubscribe();
+          reject(new Error('Phone enrollment failed'));
+        }
+      });
+
+      actor.send({ type: 'received_phone_number', phoneNumber });
+    });
   }
 
   public enrollPhoneActor = async ({
+    sessionId,
     phoneNumber,
-  }: EnrollPhoneInput): Promise<EnrollPhoneOutput> => {
-    return {
-      fsm: {
-        enrollPhoneNumber: phoneNumber,
-      },
-    };
+  }: EnrollPhoneInput): Promise<void> => {
+    await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      machine.enrollPhoneNumber = phoneNumber;
+      await machineRepository.save(machine);
+    });
   };
 
   public sendOTPSMSActor = async ({
     sessionId,
-  }: SendOTPSMSInput): Promise<SendOTPSMSOutput> => {
-    const machine = await this.datasource.getRepository(FSM).findOne({
-      where: { sessionId },
+  }: SendOTPSMSInput): Promise<void> => {
+    await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+      const outboxRepository = manager.getRepository(SMSOTPOutbox);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      const phoneNumber =
+        machine.enrollPhoneNumber ??
+        machine.stytchUser?.phone_numbers?.[0]?.phone_number;
+
+      if (!phoneNumber)
+        throw new Error(`No phone number found for sessionId: ${sessionId}`);
+
+      const existing = await outboxRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!existing) {
+        const outboxMessage = outboxRepository.create({
+          phoneNumber,
+          sessionId,
+          sessionToken: machine.intermediarySessionToken!,
+          status: OutboxStatus.PENDING,
+        });
+
+        await outboxRepository.save(outboxMessage);
+      }
     });
-
-    if (!machine) throw new NotFoundException();
-
-    const phoneNumber =
-      machine.enrollPhoneNumber ??
-      machine.stytchUser?.phone_numbers?.[0]?.phone_number;
-
-    if (!phoneNumber)
-      throw new Error(`No phone number found for sessionId: ${sessionId}`);
-
-    return {
-      smsOutbox: {
-        phoneNumber,
-        sessionId,
-        sessionToken: machine.intermediarySessionToken!,
-        status: OutboxStatus.PENDING,
-      },
-    };
   };
 
   public async submitOtp({
@@ -374,42 +344,70 @@ export class AuthService {
   }: {
     sessionId: string;
     code: string;
-  }): Promise<void> {
+  }): Promise<{ sessionToken: string }> {
     const actor = this.sessions.get(sessionId);
     if (!actor) throw new Error(`No session found for sessionId: ${sessionId}`);
 
-    const snapshot = actor.getSnapshot();
-    if (!snapshot.matches({ processing_sms_otp: 'waiting' })) {
-      throw new BadRequestException('Not in OTP verification state');
-    }
+    this.sendChecked(actor, {
+      type: 'received_otp',
+      code,
+    });
 
-    actor.send({ type: 'received_otp', code });
+    await new Promise<void>((resolve, reject) => {
+      const sub = actor.subscribe((snapshot) => {
+        if (snapshot.matches('complete')) {
+          sub.unsubscribe();
+          resolve();
+        } else if (snapshot.matches('error')) {
+          sub.unsubscribe();
+          reject(new Error('OTP validation failed'));
+        }
+      });
+      actor.send({ type: 'received_otp', code });
+    });
+
+    const sessionToken = await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+
+      return machine.sessionToken;
+    });
+
+    return { sessionToken: sessionToken! };
   }
 
   public processSMSOtpActor = async ({
     sessionId,
     code,
-  }: ProcessSMSOtpInput): Promise<ProcessSMSOtpOutput> => {
-    const machine = await this.datasource.getRepository(FSM).findOne({
-      where: { sessionId },
+  }: ProcessSMSOtpInput): Promise<void> => {
+    await this.datasource.transaction(async (manager) => {
+      const machineRepository = manager.getRepository(FSM);
+
+      const machine = await machineRepository.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!machine) throw new NotFoundException();
+      if (!machine.phoneId)
+        throw new Error(`No phone_id found for sessionId: ${sessionId}`);
+
+      const result = await this.stytch.otps.authenticate({
+        method_id: machine.phoneId,
+        code,
+        session_token: machine.intermediarySessionToken ?? undefined,
+        session_duration_minutes: 60,
+      });
+
+      machine.sessionToken = result.session_token;
+      await machineRepository.save(machine);
     });
-
-    if (!machine) throw new NotFoundException();
-    if (!machine.phoneId)
-      throw new Error(`No phone_id found for sessionId: ${sessionId}`);
-
-    const result = await this.stytch.otps.authenticate({
-      method_id: machine.phoneId,
-      code,
-      session_token: machine.intermediarySessionToken ?? undefined,
-      session_duration_minutes: 60,
-    });
-
-    return {
-      fsm: {
-        sessionToken: result.session_token,
-      },
-    };
   };
 
   public async createStateMachine(sessionId: string, email: string) {
@@ -442,9 +440,39 @@ export class AuthService {
       .getMany();
 
     for (const record of records) {
-      await this.restoreSession(record.sessionId);
+      const snapshot = record.snapshot as Snapshot<unknown>;
+      const context = (snapshot as any).context as AuthMachineContext;
+
+      const machine = createAuthMachine({
+        sendMagicLink: (input) => this.sendMagicLinkActor(input),
+        processMagicLink: (input) => this.processMagicLinkActor(input),
+        sendOTPSMS: (input) => this.sendOTPSMSActor(input),
+        enrollPhone: (input) => this.enrollPhoneActor(input),
+        processSMSOtp: (input) => this.processSMSOtpActor(input),
+      });
+
+      const actor = createActor(machine, {
+        input: { sessionId: context.sessionId, email: context.email },
+        snapshot,
+      });
+
+      this.subscribeToActor(record.sessionId, actor);
+      actor.start();
+      this.sessions.set(record.sessionId, actor);
     }
 
     console.log(`Restored ${records.length} sessions from database`);
+  }
+
+  private sendChecked(actor: Actor<AuthActor>, event: any): void {
+    const snapshot = actor.getSnapshot();
+
+    if (!snapshot.can(event)) {
+      throw new ConflictException(
+        `Cannot process '${event.type}' from state ${JSON.stringify(snapshot.value)}`,
+      );
+    }
+
+    actor.send(event);
   }
 }

@@ -43,7 +43,7 @@ export class AuthController {
     @Res() res: Response,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
-    this.authService.handleMagicLink({ sessionId, token }); // no await
+    await this.authService.handleMagicLink({ sessionId, token });
     res.redirect('/auth/verify');
   }
 
@@ -51,30 +51,33 @@ export class AuthController {
   async verifyPage(@Req() req: any, @Res() res: Response): Promise<void> {
     const sessionId = req.cookies['sessionId'];
 
-    if (!sessionId) return res.redirect('/auth');
+    if (!sessionId) {
+      return res.redirect('/auth');
+    }
 
     const state = this.authService.getSessionState(sessionId);
 
-    if (!state) return res.redirect('/auth');
-
-    if (state.matches({ processing_sms_otp: 'waiting' })) {
-      return res.sendFile(join(process.cwd(), 'public', 'otp.html'));
+    if (!state) {
+      return res.redirect('/auth');
     }
 
-    if (state.matches({ processing_phone_enrollment: 'waiting' })) {
+    if (state.matches('processing_phone_enrollment')) {
       return res.sendFile(join(process.cwd(), 'public', 'enroll-phone.html'));
     }
 
-    if (state.matches('complete')) {
-      return res.sendFile(join(process.cwd(), 'public', 'complete.html'));
+    if (state.matches('processing_sms_otp')) {
+      return res.sendFile(join(process.cwd(), 'public', 'otp.html'));
     }
 
     if (state.matches('error')) {
       return res.sendFile(join(process.cwd(), 'public', 'error.html'));
     }
 
-    // still processing, return loading page
-    return res.sendFile(join(process.cwd(), 'public', 'loading.html'));
+    if (state.matches('complete')) {
+      return res.sendFile(join(process.cwd(), 'public', 'complete.html'));
+    }
+
+    res.redirect('/auth');
   }
 
   @Post('enroll-phone')
@@ -90,18 +93,16 @@ export class AuthController {
   }
 
   @Post('otp')
-  async submitOtp(@Body() dto: SubmitOtpDto, @Req() req: any): Promise<void> {
-    const sessionId = req.cookies['sessionId'];
-    await this.authService.submitOtp({ sessionId, code: dto.code });
-  }
-
-  @Get('session')
-  async getSession(
+  async submitOtp(
+    @Body() dto: SubmitOtpDto,
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ sessionToken: string }> {
     const sessionId = req.cookies['sessionId'];
-    const sessionToken = await this.authService.getSessionToken(sessionId);
+    const { sessionToken } = await this.authService.submitOtp({
+      sessionId,
+      code: dto.code,
+    });
     res.cookie('stytchSession', sessionToken, {
       httpOnly: true,
       secure: false,
