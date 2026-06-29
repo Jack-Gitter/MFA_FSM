@@ -2,7 +2,29 @@
 <html>
 <head><title>Authenticated</title></head>
 <body>
-  <h1>You're authenticated!</h1>
-  <p>You have successfully signed in.</p>
+  <h1>Authenticated!</h1>
+  <p id="message">Finalizing your session...</p>
+  <p id="error" style="color: red;"></p>
+
+  <script>
+    async function finalize() {
+      try {
+        const res = await fetch('/auth/session', {
+          method: 'GET',
+        });
+
+        if (!res.ok) {
+          throw new Error('Failed to get session token');
+        }
+
+        const data = await res.json();
+        document.getElementById('message').textContent = 'You are now signed in!';
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    }
+
+    finalize();
+  </script>
 </body>
 </html>

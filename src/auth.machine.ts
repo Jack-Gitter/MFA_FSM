@@ -1,8 +1,18 @@
-import { AnyActorRef, fromPromise, setup } from 'xstate';
+import { fromPromise, setup, assign } from 'xstate';
+import { FSM } from './db/entities/fsm.entity';
+import { MagicLinkOutbox, OutboxStatus } from './db/entities/email-outbox.entity';
+import { SMSOTPOutbox } from './db/entities/sms-outbox.entity';
+
+export type PendingWrites = {
+  fsm?: Partial<FSM>;
+  magicLinkOutbox?: Partial<MagicLinkOutbox>;
+  smsOutbox?: Partial<SMSOTPOutbox>;
+};
 
 export type AuthMachineContext = {
   email: string;
   sessionId: string;
+  pendingWrites: PendingWrites;
 };
 
 export type AuthMachineEvents =
@@ -11,27 +21,29 @@ export type AuthMachineEvents =
   | { type: 'received_phone_number'; phoneNumber: string };
 
 export type SendMagicLinkInput = { sessionId: string; email: string };
+export type SendMagicLinkOutput = { magicLinkOutbox: Partial<MagicLinkOutbox> };
+
 export type ProcessMagicLinkInput = { sessionId: string; token: string };
-export type ProcessMagicLinkOutput = { hasPhone: boolean };
-export type SendOTPSMSInput = { sessionId: string; email: string };
+export type ProcessMagicLinkOutput = {
+  hasPhone: boolean;
+  fsm: Partial<FSM>;
+};
+
+export type SendOTPSMSInput = { sessionId: string };
+export type SendOTPSMSOutput = { smsOutbox: Partial<SMSOTPOutbox> };
+
 export type EnrollPhoneInput = { sessionId: string; phoneNumber: string };
+export type EnrollPhoneOutput = { fsm: Partial<FSM> };
+
 export type ProcessSMSOtpInput = { sessionId: string; code: string };
+export type ProcessSMSOtpOutput = { fsm: Partial<FSM> };
 
 export const createAuthMachine = (actors: {
-  sendMagicLink: (
-    input: SendMagicLinkInput,
-    parent?: AnyActorRef,
-  ) => Promise<void>;
-  processMagicLink: (
-    input: ProcessMagicLinkInput,
-    parent?: AnyActorRef,
-  ) => Promise<ProcessMagicLinkOutput>;
-  sendOTPSMS: (input: SendOTPSMSInput, parent?: AnyActorRef) => Promise<void>;
-  enrollPhone: (input: EnrollPhoneInput, parent?: AnyActorRef) => Promise<void>;
-  processSMSOtp: (
-    input: ProcessSMSOtpInput,
-    parent?: AnyActorRef,
-  ) => Promise<void>;
+  sendMagicLink: (input: SendMagicLinkInput) => Promise<SendMagicLinkOutput>;
+  processMagicLink: (input: ProcessMagicLinkInput) => Promise<ProcessMagicLinkOutput>;
+  sendOTPSMS: (input: SendOTPSMSInput) => Promise<SendOTPSMSOutput>;
+  enrollPhone: (input: EnrollPhoneInput) => Promise<EnrollPhoneOutput>;
+  processSMSOtp: (input: ProcessSMSOtpInput) => Promise<ProcessSMSOtpOutput>;
 }) =>
   setup({
     types: {
@@ -40,23 +52,20 @@ export const createAuthMachine = (actors: {
       input: {} as { sessionId: string; email: string },
     },
     actors: {
-      sendMagicLink: fromPromise<void, SendMagicLinkInput>(({ input, self }) =>
-        actors.sendMagicLink(input, self._parent ?? undefined),
+      sendMagicLink: fromPromise<SendMagicLinkOutput, SendMagicLinkInput>(
+        ({ input }) => actors.sendMagicLink(input),
       ),
-      processMagicLink: fromPromise<
-        ProcessMagicLinkOutput,
-        ProcessMagicLinkInput
-      >(({ input, self }) =>
-        actors.processMagicLink(input, self._parent ?? undefined),
+      processMagicLink: fromPromise<ProcessMagicLinkOutput, ProcessMagicLinkInput>(
+        ({ input }) => actors.processMagicLink(input),
       ),
-      sendOTPSMS: fromPromise<void, SendOTPSMSInput>(({ input, self }) =>
-        actors.sendOTPSMS(input, self._parent ?? undefined),
+      sendOTPSMS: fromPromise<SendOTPSMSOutput, SendOTPSMSInput>(
+        ({ input }) => actors.sendOTPSMS(input),
       ),
-      enrollPhone: fromPromise<void, EnrollPhoneInput>(({ input, self }) =>
-        actors.enrollPhone(input, self._parent ?? undefined),
+      enrollPhone: fromPromise<EnrollPhoneOutput, EnrollPhoneInput>(
+        ({ input }) => actors.enrollPhone(input),
       ),
-      processSMSOtp: fromPromise<void, ProcessSMSOtpInput>(({ input, self }) =>
-        actors.processSMSOtp(input, self._parent ?? undefined),
+      processSMSOtp: fromPromise<ProcessSMSOtpOutput, ProcessSMSOtpInput>(
+        ({ input }) => actors.processSMSOtp(input),
       ),
     },
   }).createMachine({
@@ -65,6 +74,7 @@ export const createAuthMachine = (actors: {
     context: ({ input }) => ({
       sessionId: input.sessionId,
       email: input.email,
+      pendingWrites: {},
     }),
     states: {
       send_magic_link: {
@@ -74,7 +84,14 @@ export const createAuthMachine = (actors: {
             sessionId: context.sessionId,
             email: context.email,
           }),
-          onDone: 'processing_magic_link',
+          onDone: {
+            target: 'processing_magic_link',
+            actions: assign({
+              pendingWrites: ({ event }) => ({
+                magicLinkOutbox: event.output.magicLinkOutbox,
+              }),
+            }),
+          },
           onError: 'error',
         },
       },
@@ -92,16 +109,25 @@ export const createAuthMachine = (actors: {
               src: 'processMagicLink',
               input: ({ context, event }) => ({
                 sessionId: context.sessionId,
-                token: (event as { type: 'received_magic_link'; token: string })
-                  .token,
+                token: (event as { type: 'received_magic_link'; token: string }).token,
               }),
               onDone: [
                 {
                   guard: ({ event }) => event.output.hasPhone === false,
                   target: '#auth.processing_phone_enrollment',
+                  actions: assign({
+                    pendingWrites: ({ event }) => ({
+                      fsm: event.output.fsm,
+                    }),
+                  }),
                 },
                 {
                   target: '#auth.send_sms_otp',
+                  actions: assign({
+                    pendingWrites: ({ event }) => ({
+                      fsm: event.output.fsm,
+                    }),
+                  }),
                 },
               ],
               onError: '#auth.error',
@@ -123,14 +149,16 @@ export const createAuthMachine = (actors: {
               src: 'enrollPhone',
               input: ({ context, event }) => ({
                 sessionId: context.sessionId,
-                phoneNumber: (
-                  event as {
-                    type: 'received_phone_number';
-                    phoneNumber: string;
-                  }
-                ).phoneNumber,
+                phoneNumber: (event as { type: 'received_phone_number'; phoneNumber: string }).phoneNumber,
               }),
-              onDone: '#auth.send_sms_otp',
+              onDone: {
+                target: '#auth.send_sms_otp',
+                actions: assign({
+                  pendingWrites: ({ event }) => ({
+                    fsm: event.output.fsm,
+                  }),
+                }),
+              },
               onError: '#auth.error',
             },
           },
@@ -142,9 +170,15 @@ export const createAuthMachine = (actors: {
           src: 'sendOTPSMS',
           input: ({ context }) => ({
             sessionId: context.sessionId,
-            email: context.email,
           }),
-          onDone: 'processing_sms_otp',
+          onDone: {
+            target: 'processing_sms_otp',
+            actions: assign({
+              pendingWrites: ({ event }) => ({
+                smsOutbox: event.output.smsOutbox,
+              }),
+            }),
+          },
           onError: 'error',
         },
       },
@@ -164,7 +198,14 @@ export const createAuthMachine = (actors: {
                 sessionId: context.sessionId,
                 code: (event as { type: 'received_otp'; code: string }).code,
               }),
-              onDone: '#auth.complete',
+              onDone: {
+                target: '#auth.complete',
+                actions: assign({
+                  pendingWrites: ({ event }) => ({
+                    fsm: event.output.fsm,
+                  }),
+                }),
+              },
               onError: '#auth.error',
             },
           },
