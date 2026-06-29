@@ -7,7 +7,7 @@
 
   <script>
     // States that mean "still working, keep waiting here".
-    const TRANSIENT = ['send_magic_link', 'processing_magic_link', 'send_sms_otp'];
+    const TRANSIENT = ['awaiting_magic_link'];
 
     async function poll() {
       try {

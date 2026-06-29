@@ -1,20 +1,13 @@
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import { Actor, AnyMachineSnapshot, createActor } from 'xstate';
 import {
-  AuthMachineContext,
-  createAuthMachine,
-  EnrollPhoneInput,
-  EnrollPhoneOutput,
-  ProcessMagicLinkInput,
-  ProcessMagicLinkOutput,
-  ProcessSMSOtpInput,
-  ProcessSMSOtpOutput,
-  SendMagicLinkInput,
-  SendMagicLinkOutput,
-  SendOTPSMSInput,
-  SendOTPSMSOutput,
-} from './auth.machine';
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { DataSource, EntityManager } from 'typeorm';
+import { transition } from 'xstate';
+import { authMachine, AuthEvent, AuthState } from './auth.machine';
 import * as stytch from 'stytch';
 import { STYTCH_CLIENT } from './stytch/types/constants';
 import { FSM } from './db/entities/fsm.entity';
@@ -25,16 +18,6 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SMSOTPOutbox } from './db/entities/sms-outbox.entity';
 
-type AuthMachine = ReturnType<typeof createAuthMachine>;
-type AuthActor = Actor<AuthMachine>;
-
-// Retry the persistence transaction this many times with the same in-memory
-// data before treating it as a hard failure.
-const MAX_TX_RETRIES = 3;
-// How many times we will roll an actor back to its last-known-good snapshot
-// before giving up and marking the session as failed (infinite-loop guard).
-const MAX_RESTORES = 2;
-
 @Injectable()
 export class AuthService {
   constructor(
@@ -42,287 +25,222 @@ export class AuthService {
     @Inject(STYTCH_CLIENT) private readonly stytch: stytch.Client,
   ) {}
 
-  private readonly sessions = new Map<string, AuthActor>();
-  // Last snapshot that was successfully committed to the database, per session.
-  private readonly lastGood = new Map<string, AnyMachineSnapshot>();
-  // Per-session promise chain so async persistence runs serially, in order.
-  private readonly persistQueue = new Map<string, Promise<void>>();
-  // How many times we have rolled a session back since its last good commit.
-  private readonly restoreCount = new Map<string, number>();
-  // Sessions that exhausted their restore budget; reported as 'error'.
-  private readonly failed = new Set<string>();
-
-  async onModuleInit() {
-    await this.restoreSessions();
-  }
-
   // ---------------------------------------------------------------------------
-  // Actors — pure, in-memory only. They never touch the database; they return
-  // the data to be assigned into the machine context, which the subscribe
-  // handler persists transactionally alongside the snapshot.
+  // The core transition primitive — the stateless equivalent of sm.Run wrapped
+  // in load → run → save → commit. No long-lived machine: we rehydrate the
+  // machine from the row's state, gate with can(), compute the destination with
+  // transition(), run the handler's work, and persist the new state + the
+  // changed data in ONE transaction. Nothing survives the request, so the
+  // in-memory state can never diverge from the database.
   // ---------------------------------------------------------------------------
-
-  public sendMagicLinkActor = async ({
-    sessionId,
-    email,
-  }: SendMagicLinkInput): Promise<SendMagicLinkOutput> => {
-    return { magicLinkOutbox: { sessionId, email } };
-  };
-
-  public processMagicLinkActor = async ({
-    token,
-    processedMagicLink,
-    stytchUser,
-    intermediarySessionToken,
-  }: ProcessMagicLinkInput): Promise<ProcessMagicLinkOutput> => {
-    // Idempotency guard: if a restore re-runs this step, do not re-consume the
-    // (single-use) magic link token — reuse what we already authenticated.
-    if (processedMagicLink && stytchUser && intermediarySessionToken) {
-      return { stytchUser, intermediarySessionToken };
-    }
-
-    const result = await this.stytch.magicLinks.authenticate({
-      token,
-      session_duration_minutes: 10,
-    });
-
-    return {
-      stytchUser: result.user,
-      intermediarySessionToken: result.session_token,
-    };
-  };
-
-  public enrollPhoneActor = async ({
-    phoneNumber,
-  }: EnrollPhoneInput): Promise<EnrollPhoneOutput> => {
-    return { enrollPhoneNumber: phoneNumber };
-  };
-
-  public sendOTPSMSActor = async ({
-    sessionId,
-    enrollPhoneNumber,
-    stytchUser,
-    intermediarySessionToken,
-  }: SendOTPSMSInput): Promise<SendOTPSMSOutput> => {
-    const phoneNumber =
-      enrollPhoneNumber ?? stytchUser?.phone_numbers?.[0]?.phone_number;
-
-    if (!phoneNumber)
-      throw new Error(`No phone number found for sessionId: ${sessionId}`);
-
-    if (!intermediarySessionToken)
-      throw new Error(
-        `No intermediary session token found for sessionId: ${sessionId}`,
-      );
-
-    return {
-      smsOtpOutbox: {
-        sessionId,
-        phoneNumber,
-        sessionToken: intermediarySessionToken,
-      },
-    };
-  };
-
-  public processSMSOtpActor = async ({
-    sessionId,
-    code,
-    phoneId,
-    intermediarySessionToken,
-    sessionToken,
-  }: ProcessSMSOtpInput): Promise<ProcessSMSOtpOutput> => {
-    // Idempotency guard: a restore must not re-consume the OTP.
-    if (sessionToken) return { sessionToken };
-
-    if (!phoneId)
-      throw new Error(`No phone_id found for sessionId: ${sessionId}`);
-
-    const result = await this.stytch.otps.authenticate({
-      method_id: phoneId,
-      code,
-      session_token: intermediarySessionToken ?? undefined,
-      session_duration_minutes: 60,
-    });
-
-    return { sessionToken: result.session_token };
-  };
-
-  // ---------------------------------------------------------------------------
-  // Transactional persistence — the single point where in-memory state hits the
-  // database. One transaction commits the snapshot + the context-derived
-  // entities together.
-  // ---------------------------------------------------------------------------
-
-  private enqueuePersist(
+  private async applyTransition(
     sessionId: string,
-    snapshot: AnyMachineSnapshot,
-  ): void {
-    const prev = this.persistQueue.get(sessionId) ?? Promise.resolve();
-    const next = prev
-      .catch(() => undefined)
-      .then(() => this.persistWithRetry(sessionId, snapshot));
-    this.persistQueue.set(sessionId, next);
-  }
+    event: AuthEvent,
+    work?: (
+      manager: EntityManager,
+      row: FSM,
+      nextState: AuthState,
+    ) => Promise<void> | void,
+  ): Promise<FSM> {
+    return this.datasource.transaction(async (manager) => {
+      const repo = manager.getRepository(FSM);
 
-  private async persistWithRetry(
-    sessionId: string,
-    snapshot: AnyMachineSnapshot,
-  ): Promise<void> {
-    for (let attempt = 1; attempt <= MAX_TX_RETRIES; attempt++) {
-      try {
-        await this.persistOnce(sessionId, snapshot);
-        this.lastGood.set(sessionId, snapshot);
-        this.restoreCount.set(sessionId, 0);
-        return;
-      } catch (err) {
-        console.error(
-          `Persist attempt ${attempt}/${MAX_TX_RETRIES} failed for ${sessionId}:`,
-          err,
+      // load (with row lock so concurrent operations serialize)
+      const row = await repo.findOne({
+        where: { sessionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) throw new NotFoundException(`No session found: ${sessionId}`);
+
+      // rehydrate the machine at the persisted state and gate the event
+      const snapshot = authMachine.resolveState({
+        value: row.state,
+        context: {},
+      });
+      if (!snapshot.can(event)) {
+        throw new ConflictException(
+          `Cannot '${event.type}' from state '${row.state}'`,
         );
-        if (attempt === MAX_TX_RETRIES) {
-          this.handlePersistFailure(sessionId);
-        }
       }
-    }
+
+      // ask the machine for the destination (pure transition, no running actor)
+      const [nextSnapshot] = transition(authMachine, snapshot, event);
+      const nextState = nextSnapshot.value as AuthState;
+
+      // the handler's work (the "PostTransition") — mutates row / writes
+      // related rows through the same transaction
+      await work?.(manager, row, nextState);
+
+      // persist the new state alongside the work, atomically
+      row.state = nextState;
+      await repo.save(row);
+      return row;
+    });
   }
 
-  private async persistOnce(
-    sessionId: string,
-    snapshot: AnyMachineSnapshot,
-  ): Promise<void> {
-    const ctx = snapshot.context as AuthMachineContext;
+  // ---------------------------------------------------------------------------
+  // HTTP handlers — all the logic lives here.
+  // ---------------------------------------------------------------------------
+
+  // Create a session and enqueue the magic-link email (one transaction).
+  public async createSession(email: string): Promise<{ sessionId: string }> {
+    const sessionId = crypto.randomUUID();
 
     await this.datasource.transaction(async (manager) => {
-      await manager.getRepository(FSM).upsert(
-        {
+      await manager.getRepository(FSM).save(
+        manager.getRepository(FSM).create({
           sessionId,
-          snapshot: snapshot.toJSON() as object,
-          processedMagicLink: ctx.processedMagicLink,
-          enrollPhoneNumber: ctx.enrollPhoneNumber,
-          intermediarySessionToken: ctx.intermediarySessionToken,
-          stytchUser: ctx.stytchUser,
-          sessionToken: ctx.sessionToken,
-          phoneId: ctx.phoneId,
-        },
-        ['sessionId'],
+          email,
+          state: 'awaiting_magic_link',
+        }),
       );
 
-      // Outbox rows are inserted once and keyed by a unique session_id, so
-      // re-persisting is a no-op and never clobbers the cron's status updates.
-      if (ctx.magicLinkOutbox) {
-        await manager
-          .getRepository(MagicLinkOutbox)
-          .createQueryBuilder()
-          .insert()
-          .values({
-            email: ctx.magicLinkOutbox.email,
-            sessionId: ctx.magicLinkOutbox.sessionId,
-            status: OutboxStatus.PENDING,
-          })
-          .orIgnore()
-          .execute();
-      }
-
-      if (ctx.smsOtpOutbox) {
-        await manager
-          .getRepository(SMSOTPOutbox)
-          .createQueryBuilder()
-          .insert()
-          .values({
-            phoneNumber: ctx.smsOtpOutbox.phoneNumber,
-            sessionId: ctx.smsOtpOutbox.sessionId,
-            sessionToken: ctx.smsOtpOutbox.sessionToken,
-            status: OutboxStatus.PENDING,
-          })
-          .orIgnore()
-          .execute();
-      }
+      await manager
+        .getRepository(MagicLinkOutbox)
+        .createQueryBuilder()
+        .insert()
+        .values({ email, sessionId, status: OutboxStatus.PENDING })
+        .orIgnore()
+        .execute();
     });
+
+    return { sessionId };
   }
 
-  private handlePersistFailure(sessionId: string): void {
-    const count = (this.restoreCount.get(sessionId) ?? 0) + 1;
-    this.restoreCount.set(sessionId, count);
-
-    // Stop the diverged actor — its in-memory state is ahead of the database.
-    this.sessions.get(sessionId)?.stop();
-    this.sessions.delete(sessionId);
-
-    const lastGood = this.lastGood.get(sessionId);
-
-    if (!lastGood || count > MAX_RESTORES) {
-      console.error(
-        `Giving up on session ${sessionId} after ${count} restore(s); marking as failed.`,
-      );
-      this.failed.add(sessionId);
-      return;
-    }
-
-    console.warn(
-      `Restoring session ${sessionId} to last known good state (restore #${count}).`,
-    );
-    this.spawnActor(sessionId, { snapshot: lastGood });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Actor lifecycle
-  // ---------------------------------------------------------------------------
-
-  private buildMachine(): AuthMachine {
-    return createAuthMachine({
-      sendMagicLink: (input) => this.sendMagicLinkActor(input),
-      processMagicLink: (input) => this.processMagicLinkActor(input),
-      sendOTPSMS: (input) => this.sendOTPSMSActor(input),
-      enrollPhone: (input) => this.enrollPhoneActor(input),
-      processSMSOtp: (input) => this.processSMSOtpActor(input),
-    });
-  }
-
-  private spawnActor(
+  public async handleMagicLink(
     sessionId: string,
-    opts: {
-      input?: { sessionId: string; email: string };
-      snapshot?: AnyMachineSnapshot;
-    },
-  ): AuthActor {
-    const actor = createActor(this.buildMachine(), opts as never);
-    actor.subscribe((snapshot) =>
-      this.enqueuePersist(sessionId, snapshot as AnyMachineSnapshot),
-    );
-    this.sessions.set(sessionId, actor);
-    actor.start();
-    return actor;
-  }
+    token: string,
+  ): Promise<void> {
+    const row = await this.datasource
+      .getRepository(FSM)
+      .findOne({ where: { sessionId } });
+    if (!row) throw new NotFoundException(`No session found: ${sessionId}`);
 
-  public async createStateMachine(sessionId: string, email: string) {
-    this.failed.delete(sessionId);
-    this.spawnActor(sessionId, { input: { sessionId, email } });
-  }
-
-  public async restoreSessions(): Promise<void> {
-    const repo = this.datasource.getRepository(FSM);
-
-    const records = await repo
-      .createQueryBuilder('fsm')
-      .where(`fsm.snapshot->>'status' NOT IN (:...statuses)`, {
-        statuses: ['done', 'error', 'stopped'],
-      })
-      .orderBy('fsm.created_at', 'DESC')
-      .getMany();
-
-    for (const record of records) {
-      const snapshot = record.snapshot as unknown as AnyMachineSnapshot;
-      this.lastGood.set(record.sessionId, snapshot);
-      this.spawnActor(record.sessionId, { snapshot });
+    // Gate before the external call so we don't authenticate in the wrong
+    // state. (The hasPhone value is irrelevant to whether the event is legal.)
+    const gate = authMachine.resolveState({ value: row.state, context: {} });
+    if (!gate.can({ type: 'magic_link_verified', hasPhone: true })) {
+      throw new ConflictException(
+        `Cannot verify magic link from state '${row.state}'`,
+      );
     }
 
-    console.log(`Restored ${records.length} sessions from database`);
+    // External, non-idempotent call — OUTSIDE the transaction. Guarded so a
+    // retry does not re-consume the single-use token.
+    let stytchUser = row.stytchUser;
+    let intermediarySessionToken = row.intermediarySessionToken;
+    if (!row.processedMagicLink) {
+      const result = await this.stytch.magicLinks.authenticate({
+        token,
+        session_duration_minutes: 10,
+      });
+      stytchUser = result.user;
+      intermediarySessionToken = result.session_token;
+    }
+    const hasPhone = (stytchUser?.phone_numbers?.length ?? 0) > 0;
+
+    await this.applyTransition(
+      sessionId,
+      { type: 'magic_link_verified', hasPhone },
+      async (manager, r, nextState) => {
+        r.stytchUser = stytchUser;
+        r.intermediarySessionToken = intermediarySessionToken;
+        r.processedMagicLink = true;
+        // If we're going straight to OTP, enqueue the SMS in the same txn.
+        if (nextState === 'awaiting_otp') {
+          await this.enqueueSms(manager, r);
+        }
+      },
+    );
+  }
+
+  public async enrollPhone(
+    sessionId: string,
+    phoneNumber: string,
+  ): Promise<void> {
+    await this.applyTransition(
+      sessionId,
+      { type: 'phone_enrolled', phoneNumber },
+      async (manager, row) => {
+        row.enrollPhoneNumber = phoneNumber;
+        await this.enqueueSms(manager, row);
+      },
+    );
+  }
+
+  public async submitOtp(sessionId: string, code: string): Promise<void> {
+    const row = await this.datasource
+      .getRepository(FSM)
+      .findOne({ where: { sessionId } });
+    if (!row) throw new NotFoundException(`No session found: ${sessionId}`);
+
+    const gate = authMachine.resolveState({ value: row.state, context: {} });
+    if (!gate.can({ type: 'otp_verified' })) {
+      throw new ConflictException(
+        `Cannot verify OTP from state '${row.state}'`,
+      );
+    }
+
+    // External, non-idempotent call — OUTSIDE the transaction, idempotency-guarded.
+    let sessionToken = row.sessionToken;
+    if (!sessionToken) {
+      if (!row.phoneId)
+        throw new BadRequestException('OTP has not been sent yet');
+      const result = await this.stytch.otps.authenticate({
+        method_id: row.phoneId,
+        code,
+        session_token: row.intermediarySessionToken ?? undefined,
+        session_duration_minutes: 60,
+      });
+      sessionToken = result.session_token;
+    }
+
+    await this.applyTransition(sessionId, { type: 'otp_verified' }, (_m, r) => {
+      r.sessionToken = sessionToken;
+    });
+  }
+
+  // Enqueue the OTP SMS as an outbox row (sent later by the cron). No external
+  // call here — it's a pure DB write, committed with the state change.
+  private async enqueueSms(manager: EntityManager, row: FSM): Promise<void> {
+    const phoneNumber =
+      row.enrollPhoneNumber ?? row.stytchUser?.phone_numbers?.[0]?.phone_number;
+    if (!phoneNumber)
+      throw new BadRequestException(
+        `No phone number on file for ${row.sessionId}`,
+      );
+    if (!row.intermediarySessionToken)
+      throw new BadRequestException(
+        `Session ${row.sessionId} not authenticated`,
+      );
+
+    await manager
+      .getRepository(SMSOTPOutbox)
+      .createQueryBuilder()
+      .insert()
+      .values({
+        sessionId: row.sessionId,
+        phoneNumber,
+        sessionToken: row.intermediarySessionToken,
+        status: OutboxStatus.PENDING,
+      })
+      .orIgnore()
+      .execute();
+  }
+
+  public async getStatus(
+    sessionId: string,
+  ): Promise<{ state: string; sessionToken: string | null } | null> {
+    const row = await this.datasource
+      .getRepository(FSM)
+      .findOne({ where: { sessionId } });
+    if (!row) return null;
+    return { state: row.state, sessionToken: row.sessionToken };
   }
 
   // ---------------------------------------------------------------------------
-  // Crons — transactional-outbox senders. These run external Stytch sends and
-  // may write the database directly; the "no persistence in actors" rule does
-  // not apply to infrastructure workers.
+  // Crons — the transactional-outbox senders. They make the external Stytch
+  // calls and may write the DB directly (they are infrastructure, not actors).
   // ---------------------------------------------------------------------------
 
   @Cron(CronExpression.EVERY_5_SECONDS)
@@ -381,25 +299,19 @@ export class AuthService {
     );
 
     await Promise.all(
-      results.map((result, i) => {
+      results.map(async (result, i) => {
         const entry = pending[i];
         if (result.status === 'fulfilled') {
           entry.status = OutboxStatus.SENT;
           console.log('sent sms otp!');
-
-          // Feed the Stytch phone_id back into the live actor; the subscribe
-          // handler then persists it with the snapshot. No direct DB write.
-          const actor = this.sessions.get(entry.sessionId);
-          if (actor) {
-            actor.send({
-              type: 'sms_dispatched',
-              phoneId: result.value.phone_id,
-            });
-          } else {
-            console.warn(
-              `No in-memory actor for session ${entry.sessionId}; phone_id not delivered.`,
+          // Write the Stytch phone_id straight onto the session row — it's a
+          // field the OTP-verify step needs, not a state transition.
+          await this.datasource
+            .getRepository(FSM)
+            .update(
+              { sessionId: entry.sessionId },
+              { phoneId: result.value.phone_id },
             );
-          }
         } else {
           console.error(
             `Failed to send OTP SMS to ${entry.phoneNumber}:`,
@@ -410,108 +322,5 @@ export class AuthService {
         return repo.save(entry);
       }),
     );
-  }
-
-  // ---------------------------------------------------------------------------
-  // HTTP-facing methods — all non-blocking. They send an event and return; the
-  // frontend polls getStatus to learn when to advance.
-  // ---------------------------------------------------------------------------
-
-  public sendMagicLink = async (email: string) => {
-    const sessionId = crypto.randomUUID();
-    await this.createStateMachine(sessionId, email);
-    return { sessionId };
-  };
-
-  public handleMagicLink({
-    sessionId,
-    token,
-  }: {
-    sessionId: string;
-    token: string;
-  }): void {
-    const actor = this.sessions.get(sessionId);
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
-    this.sendChecked(actor, { type: 'received_magic_link', token });
-  }
-
-  public enrollPhone({
-    sessionId,
-    phoneNumber,
-  }: {
-    sessionId: string;
-    phoneNumber: string;
-  }): void {
-    const actor = this.sessions.get(sessionId);
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
-    this.sendChecked(actor, { type: 'received_phone_number', phoneNumber });
-  }
-
-  public submitOtp({
-    sessionId,
-    code,
-  }: {
-    sessionId: string;
-    code: string;
-  }): void {
-    const actor = this.sessions.get(sessionId);
-    if (!actor) {
-      throw new Error(`No session found for sessionId: ${sessionId}`);
-    }
-    this.sendChecked(actor, { type: 'received_otp', code });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Status — what page should the frontend show? Reads the live actor when
-  // present (freshest), falling back to the persisted row.
-  // ---------------------------------------------------------------------------
-
-  public async getStatus(
-    sessionId: string,
-  ): Promise<{ state: string; sessionToken: string | null } | null> {
-    if (this.failed.has(sessionId)) {
-      return { state: 'error', sessionToken: null };
-    }
-
-    const actor = this.sessions.get(sessionId);
-    if (actor) {
-      const snapshot = actor.getSnapshot();
-      return {
-        state: this.topLevelState(snapshot.value),
-        sessionToken: (snapshot.context as AuthMachineContext).sessionToken,
-      };
-    }
-
-    const record = await this.datasource
-      .getRepository(FSM)
-      .findOne({ where: { sessionId } });
-    if (!record) return null;
-
-    return {
-      state: this.topLevelState((record.snapshot as { value: unknown }).value),
-      sessionToken: record.sessionToken,
-    };
-  }
-
-  private topLevelState(value: unknown): string {
-    if (typeof value === 'string') return value;
-    if (value && typeof value === 'object') return Object.keys(value)[0];
-    return 'error';
-  }
-
-  private sendChecked(actor: AuthActor, event: any): void {
-    const snapshot = actor.getSnapshot();
-
-    if (!snapshot.can(event)) {
-      throw new ConflictException(
-        `Cannot process '${event.type}' from state ${JSON.stringify(snapshot.value)}`,
-      );
-    }
-
-    actor.send(event);
   }
 }

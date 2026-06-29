@@ -12,8 +12,13 @@ export class FSM {
   @PrimaryColumn({ name: 'session_id' })
   sessionId: string;
 
-  @Column({ type: 'jsonb' })
-  snapshot: object;
+  // The single source of truth for this session's state. Just a string —
+  // rehydrated into the machine on each request and written back here.
+  @Column({ type: 'varchar' })
+  state: string;
+
+  @Column({ type: 'varchar', nullable: true, default: null })
+  email: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

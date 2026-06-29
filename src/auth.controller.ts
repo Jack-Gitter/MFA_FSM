@@ -36,7 +36,7 @@ export class AuthController {
     @Body() dto: SendMagicLinkDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<SendMagicLinkResponse> {
-    const result = await this.authService.sendMagicLink(dto.email);
+    const result = await this.authService.createSession(dto.email);
     res.cookie('sessionId', result.sessionId, {
       httpOnly: true,
       secure: false,
@@ -52,8 +52,7 @@ export class AuthController {
     @Res() res: Response,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
-    // Non-blocking: fire the event and let the frontend poll for the result.
-    this.authService.handleMagicLink({ sessionId, token });
+    await this.authService.handleMagicLink(sessionId, token);
     res.redirect('/auth/verify');
   }
 
@@ -81,9 +80,9 @@ export class AuthController {
     }
 
     switch (status.state) {
-      case 'processing_phone_enrollment':
+      case 'awaiting_phone':
         return res.sendFile(join(process.cwd(), 'public', 'enroll-phone.html'));
-      case 'processing_sms_otp':
+      case 'awaiting_otp':
         return res.sendFile(join(process.cwd(), 'public', 'otp.html'));
       case 'complete':
         if (status.sessionToken) {
@@ -97,7 +96,7 @@ export class AuthController {
       case 'error':
         return res.sendFile(join(process.cwd(), 'public', 'error.html'));
       default:
-        // send_magic_link, processing_magic_link, send_sms_otp — transient.
+        // awaiting_magic_link — transient, poll until it advances.
         return res.sendFile(join(process.cwd(), 'public', 'waiting.html'));
     }
   }
@@ -109,7 +108,7 @@ export class AuthController {
     @Req() req: any,
   ): Promise<{ accepted: true }> {
     const sessionId = req.cookies['sessionId'];
-    this.authService.enrollPhone({ sessionId, phoneNumber: dto.phoneNumber });
+    await this.authService.enrollPhone(sessionId, dto.phoneNumber);
     return { accepted: true };
   }
 
@@ -120,7 +119,7 @@ export class AuthController {
     @Req() req: any,
   ): Promise<{ accepted: true }> {
     const sessionId = req.cookies['sessionId'];
-    this.authService.submitOtp({ sessionId, code: dto.code });
+    await this.authService.submitOtp(sessionId, dto.code);
     return { accepted: true };
   }
 }
