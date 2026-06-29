@@ -4,12 +4,16 @@
 <body>
   <h1>Enter your OTP code</h1>
   <input type="text" id="code" placeholder="123456" maxlength="6" />
-  <button type="button" onclick="submit()">Submit</button>
+  <button type="button" id="submitBtn" onclick="submit()">Submit</button>
+  <p id="message" style="color: green;"></p>
   <p id="error" style="color: red;"></p>
 
   <script>
+    const CURRENT = 'processing_sms_otp';
+
     async function submit() {
       const code = document.getElementById('code').value;
+      document.getElementById('error').textContent = '';
       try {
         const res = await fetch('/auth/otp', {
           method: 'POST',
@@ -17,13 +21,34 @@
           body: JSON.stringify({ code }),
         });
 
-        if (!res.ok) throw new Error('Failed to verify OTP');
+        if (!res.ok) throw new Error('Failed to submit OTP');
 
-        window.location.href = '/auth/verify';
+        // Accepted (202). The FSM now validates asynchronously; polling below
+        // advances the page once it reaches complete or error.
+        document.getElementById('submitBtn').disabled = true;
+        document.getElementById('message').textContent = 'Verifying…';
       } catch (err) {
         document.getElementById('error').textContent = err.message;
       }
     }
+
+    async function poll() {
+      try {
+        const res = await fetch('/auth/status');
+        const { state } = await res.json();
+        if (!state) {
+          window.location.href = '/auth';
+          return;
+        }
+        if (state !== CURRENT) {
+          window.location.href = '/auth/verify';
+        }
+      } catch (err) {
+        // transient network error — keep polling
+      }
+    }
+
+    setInterval(poll, 1500);
   </script>
 </body>
 </html>

@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import {
   EnrollPhoneDto,
@@ -43,8 +52,18 @@ export class AuthController {
     @Res() res: Response,
   ): Promise<void> {
     const sessionId = req.cookies['sessionId'];
-    await this.authService.handleMagicLink({ sessionId, token });
+    // Non-blocking: fire the event and let the frontend poll for the result.
+    this.authService.handleMagicLink({ sessionId, token });
     res.redirect('/auth/verify');
+  }
+
+  @Get('status')
+  @ApiOperation({ summary: 'Poll the current FSM state for this session' })
+  async status(@Req() req: any): Promise<{ state: string | null }> {
+    const sessionId = req.cookies['sessionId'];
+    if (!sessionId) return { state: null };
+    const status = await this.authService.getStatus(sessionId);
+    return { state: status?.state ?? null };
   }
 
   @Get('verify')
@@ -55,59 +74,53 @@ export class AuthController {
       return res.redirect('/auth');
     }
 
-    const state = this.authService.getSessionState(sessionId);
+    const status = await this.authService.getStatus(sessionId);
 
-    if (!state) {
+    if (!status) {
       return res.redirect('/auth');
     }
 
-    if (state.matches('processing_phone_enrollment')) {
-      return res.sendFile(join(process.cwd(), 'public', 'enroll-phone.html'));
+    switch (status.state) {
+      case 'processing_phone_enrollment':
+        return res.sendFile(join(process.cwd(), 'public', 'enroll-phone.html'));
+      case 'processing_sms_otp':
+        return res.sendFile(join(process.cwd(), 'public', 'otp.html'));
+      case 'complete':
+        if (status.sessionToken) {
+          res.cookie('stytchSession', status.sessionToken, {
+            httpOnly: true,
+            secure: false,
+            sameSite: 'lax',
+          });
+        }
+        return res.sendFile(join(process.cwd(), 'public', 'complete.html'));
+      case 'error':
+        return res.sendFile(join(process.cwd(), 'public', 'error.html'));
+      default:
+        // send_magic_link, processing_magic_link, send_sms_otp — transient.
+        return res.sendFile(join(process.cwd(), 'public', 'waiting.html'));
     }
-
-    if (state.matches('processing_sms_otp')) {
-      return res.sendFile(join(process.cwd(), 'public', 'otp.html'));
-    }
-
-    if (state.matches('error')) {
-      return res.sendFile(join(process.cwd(), 'public', 'error.html'));
-    }
-
-    if (state.matches('complete')) {
-      return res.sendFile(join(process.cwd(), 'public', 'complete.html'));
-    }
-
-    res.redirect('/auth');
   }
 
   @Post('enroll-phone')
+  @HttpCode(202)
   async enrollPhone(
     @Body() dto: EnrollPhoneDto,
     @Req() req: any,
-  ): Promise<void> {
+  ): Promise<{ accepted: true }> {
     const sessionId = req.cookies['sessionId'];
-    await this.authService.enrollPhone({
-      sessionId,
-      phoneNumber: dto.phoneNumber,
-    });
+    this.authService.enrollPhone({ sessionId, phoneNumber: dto.phoneNumber });
+    return { accepted: true };
   }
 
   @Post('otp')
+  @HttpCode(202)
   async submitOtp(
     @Body() dto: SubmitOtpDto,
     @Req() req: any,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<{ sessionToken: string }> {
+  ): Promise<{ accepted: true }> {
     const sessionId = req.cookies['sessionId'];
-    const { sessionToken } = await this.authService.submitOtp({
-      sessionId,
-      code: dto.code,
-    });
-    res.cookie('stytchSession', sessionToken, {
-      httpOnly: true,
-      secure: false,
-      sameSite: 'lax',
-    });
-    return { sessionToken };
+    this.authService.submitOtp({ sessionId, code: dto.code });
+    return { accepted: true };
   }
 }

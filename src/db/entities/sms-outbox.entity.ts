@@ -20,7 +20,7 @@ export class SMSOTPOutbox {
   @Column({ name: 'phone_number' })
   phoneNumber: string;
 
-  @Column({ name: 'session_id' })
+  @Column({ name: 'session_id', unique: true })
   sessionId: string;
 
   @Column({ name: 'session_token' })

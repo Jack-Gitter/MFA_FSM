@@ -4,28 +4,51 @@
 <body>
   <h1>Enter your phone number</h1>
   <input type="tel" id="phoneNumber" placeholder="+12025550162" />
-  <button type="button" onclick="submit()">Submit</button>
+  <button type="button" id="submitBtn" onclick="submit()">Submit</button>
+  <p id="message" style="color: green;"></p>
   <p id="error" style="color: red;"></p>
 
   <script>
+    const CURRENT = 'processing_phone_enrollment';
+
     async function submit() {
       const phoneNumber = document.getElementById('phoneNumber').value;
+      document.getElementById('error').textContent = '';
       try {
-		const res = await fetch('/auth/enroll-phone', {
-		  method: 'POST',
-		  headers: { 'Content-Type': 'application/json' },
-		  body: JSON.stringify({ phoneNumber }),
-		});
+        const res = await fetch('/auth/enroll-phone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber }),
+        });
 
-		if (!res.ok) {
-		  throw new Error('Failed to enroll phone');
-		}
+        if (!res.ok) throw new Error('Failed to enroll phone');
 
-		window.location.href = '/auth/verify';
+        // Accepted (202). Polling below advances the page once the FSM moves
+        // on to sending the OTP.
+        document.getElementById('submitBtn').disabled = true;
+        document.getElementById('message').textContent = 'Submitting…';
       } catch (err) {
         document.getElementById('error').textContent = err.message;
       }
     }
+
+    async function poll() {
+      try {
+        const res = await fetch('/auth/status');
+        const { state } = await res.json();
+        if (!state) {
+          window.location.href = '/auth';
+          return;
+        }
+        if (state !== CURRENT) {
+          window.location.href = '/auth/verify';
+        }
+      } catch (err) {
+        // transient network error — keep polling
+      }
+    }
+
+    setInterval(poll, 1500);
   </script>
 </body>
 </html>
