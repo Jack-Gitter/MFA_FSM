@@ -64,7 +64,10 @@ export class AuthService {
         context: {},
       });
 
-      if (!snapshot.can({ type: 'magic_link_verified', hasPhone: true })) {
+      if (
+        !snapshot.can({ type: 'magic_link_verified', hasPhone: true }) ||
+        !snapshot.can({ type: 'magic_link_verified', hasPhone: false })
+      ) {
         throw new ConflictException(
           `Cannot verify magic link from state '${fsm.state}'`,
         );
@@ -81,6 +84,7 @@ export class AuthService {
       }
 
       const hasPhone = (fsm.stytchUser?.phone_numbers?.length ?? 0) > 0;
+
       const nextState = transition(authMachine, snapshot, {
         type: 'magic_link_verified',
         hasPhone,
@@ -154,8 +158,10 @@ export class AuthService {
       }
 
       if (!fsm.sessionToken) {
-        if (!fsm.phoneId)
+        if (!fsm.phoneId) {
           throw new BadRequestException('OTP has not been sent yet');
+        }
+
         const result = await this.stytch.otps.authenticate({
           method_id: fsm.phoneId,
           code,
